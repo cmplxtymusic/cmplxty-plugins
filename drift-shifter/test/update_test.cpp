@@ -29,6 +29,17 @@ static void offline()
     // ---- version.json
     Info i;
     const juce::String good = R"j({"version":"1.0.2","url":"https://cmplxty.music/plugins/drift-shifter/","installer":"https://cmplxty.music/plugins/drift-shifter/CMPLXTY-Drift-Setup-1.0.0-win.exe","notes":"Gender fix"})j";
+    { // "mac" block: used only when useMacBlock() (true on macOS), falls back to top level
+        const char* mj = R"j({"version":"1.0.5","url":"https://cmplxty.music/a.exe","mac":{"version":"1.0.6","url":"https://cmplxty.music/a.pkg","installer":"a.pkg","sha256":"00","size":1,"notes":"m"}})j";
+        Info mi; useMacBlock() = false;
+        CHECK (parseInfo (mj, mi) && mi.version == "1.0.5" && mi.url.endsWith (".exe"));
+        useMacBlock() = true;
+        CHECK (parseInfo (mj, mi) && mi.version == "1.0.6" && mi.url.endsWith (".pkg") && mi.installer == "a.pkg" && mi.notes == "m");
+        CHECK (parseInfo (R"j({"version":"1.0.5","url":"https://cmplxty.music/a.exe"})j", mi) && mi.version == "1.0.5");
+        CHECK (parseInfo (R"j({"version":"1.0.5","url":"https://cmplxty.music/a.exe","mac":{"version":""}})j", mi) && mi.version == "1.0.5");
+        CHECK (! parseInfo (R"j({"version":"1.0.5","url":"https://cmplxty.music/a.exe","mac":{"version":"1.0.6","url":"https://evil.example/a.pkg"}})j", mi));
+        useMacBlock() = false;
+    }
     CHECK (parseInfo (good, i) && i.version == "1.0.2" && i.url == "https://cmplxty.music/plugins/drift-shifter/" && i.installer.endsWith ("CMPLXTY-Drift-Setup-1.0.0-win.exe") && i.notes == "Gender fix");
     CHECK (parseInfo (R"j({"version":"1.0.2","url":"https://cmplxty.music/plugins/drift-shifter/"})j", i) && i.installer.isEmpty() && i.notes.isEmpty());
     // the shape the listing publishes: url = direct installer URL, "Update" opens its folder page

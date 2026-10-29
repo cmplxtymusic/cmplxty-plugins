@@ -3,7 +3,7 @@
 
 namespace
 {
-const juce::Colour kBg (0xff080d0a), kPanel (0xff111a15), kPri (0xffa6ff00), kSec (0xffff3d6e), kDim (0xff8ea597), kTrack (0xff233128);
+const juce::Colour kBg (0xff0c0c0c), kPanel (0xff181818), kPri (0xffffffff), kSec (0xffb8b8b8), kDim (0xff9f9f9f), kTrack (0xff2d2d2d);
 constexpr int kFooterH = 22;
 
 using dfui::uiFont;
@@ -98,7 +98,7 @@ void PopupOverlay::paint (juce::Graphics& g)
 {
     if (! open) return;
     g.setColour (juce::Colours::black.withAlpha (0.35f)); g.fillRoundedRectangle (panel.translated (2, 3).toFloat(), 6.0f);
-    g.setColour (juce::Colour (0xff17231c)); g.fillRoundedRectangle (panel.toFloat(), 6.0f);
+    g.setColour (juce::Colour (0xff202020)); g.fillRoundedRectangle (panel.toFloat(), 6.0f);
     g.setColour (kPri.withAlpha (0.7f)); g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 6.0f, 1.0f);
     const auto f = uiFont (13.0f);
     for (int i = 0; i < (int) items.size(); ++i)
@@ -169,7 +169,7 @@ void UpdateBanner::show (const df::upd::Info& i)
 void UpdateBanner::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    g.setColour (juce::Colour (0xff17231c)); g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (juce::Colour (0xff202020)); g.fillRoundedRectangle (r, 6.0f);
     g.setColour (kSec.withAlpha (0.85f)); g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
     g.setColour (kSec); g.fillEllipse (10.0f, r.getCentreY() - 3.0f, 6.0f, 6.0f);
     g.setColour (juce::Colours::white); g.setFont (uiFont (12.0f, true));
@@ -226,7 +226,7 @@ void DriftPanel::Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w,
     const float ring = juce::jmax (3.0f, d * 0.075f), rr = r - ring * 0.5f;
     const float ang = a0 + pos * (a1 - a0);
     // knob body
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1d2b23), c.x, c.y - r, juce::Colour (0xff0c130f), c.x, c.y + r, false));
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff272727), c.x, c.y - r, juce::Colour (0xff111111), c.x, c.y + r, false));
     g.fillEllipse (c.x - rr + ring, c.y - rr + ring, (rr - ring) * 2.0f, (rr - ring) * 2.0f);
     // track
     juce::Path track; track.addCentredArc (c.x, c.y, rr, rr, 0.0f, a0, a1, true);
@@ -358,7 +358,7 @@ void SpectrumView::mouseDoubleClick (const juce::MouseEvent& e)
 void SpectrumView::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat();
-    g.setColour (juce::Colour (0xff0a110d)); g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (juce::Colour (0xff0f0f0f)); g.fillRoundedRectangle (r, 6.0f);
     const auto plot = plotArea();
     auto yOf = [&] (float db) { return plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, (db - kDbBottom) / -kDbBottom); };
 
@@ -447,7 +447,7 @@ void SpectrumView::paint (juce::Graphics& g)
         const bool active = hot == i || drag == i;
         g.setColour (kSec.withAlpha (active ? 1.0f : 0.8f)); g.fillRect (x - 0.75f, plot.getY(), 1.5f, plot.getHeight());
         const auto grip = juce::Rectangle<float> (x - 6.0f, plot.getCentreY() - 15.0f, 12.0f, 30.0f);
-        g.setColour (juce::Colour (0xff1a0f13)); g.fillRoundedRectangle (grip, 3.0f);
+        g.setColour (juce::Colour (0xff121212)); g.fillRoundedRectangle (grip, 3.0f);
         g.setColour (kSec.withAlpha (active ? 1.0f : 0.9f)); g.drawRoundedRectangle (grip, 3.0f, active ? 1.8f : 1.2f);
         for (int k = -1; k <= 1; ++k) g.fillRect (x - 3.0f, grip.getCentreY() + (float) k * 5.0f - 0.5f, 6.0f, 1.0f);
         const float hz = i == 0 ? xoL : xoH;

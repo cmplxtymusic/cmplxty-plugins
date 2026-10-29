@@ -65,15 +65,36 @@ inline juce::String pageForUrl (const juce::String& url)
     return url;
 }
 
+// true on macOS; tests can flip it to exercise the "mac" block on other platforms
+inline bool& useMacBlock()
+{
+   #if JUCE_MAC
+    static bool b = true;
+   #else
+    static bool b = false;
+   #endif
+    return b;
+}
+
 inline bool parseInfo (const juce::String& text, Info& out, bool requireTrustedUrl = true)
 {
     juce::var v;
     if (text.length() > kMaxBytes || ! juce::JSON::parse (text, v).wasOk() || ! v.isObject()) return false;
+    // On macOS a "mac" block { version, url, installer, sha256, size, notes } wins when it has a version and url;
+    // otherwise (and on Windows/Linux) the top-level fields are used.
+    juce::var src = v;
+    if (useMacBlock())
+    {
+        const auto m = v.getProperty ("mac", {});
+        if (m.isObject() && m.getProperty ("version", {}).toString().trim().isNotEmpty()
+                         && m.getProperty ("url", {}).toString().trim().isNotEmpty())
+            src = m;
+    }
     Info i;
-    i.version = v.getProperty ("version", {}).toString().trim();
-    i.url = v.getProperty ("url", {}).toString().trim();
-    i.installer = v.getProperty ("installer", {}).toString().trim();
-    i.notes = v.getProperty ("notes", {}).toString().trim().substring (0, 400);
+    i.version = src.getProperty ("version", {}).toString().trim();
+    i.url = src.getProperty ("url", {}).toString().trim();
+    i.installer = src.getProperty ("installer", {}).toString().trim();
+    i.notes = src.getProperty ("notes", {}).toString().trim().substring (0, 400);
     int dummy[4];
     if (! parseVersion (i.version, dummy)) return false;
     if (requireTrustedUrl && ! isTrustedUrl (i.url)) return false;
