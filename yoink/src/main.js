@@ -235,7 +235,7 @@ app.whenReady().then(() => {
   async function checkUpdates(manual) {
     const override = process.env.YOINK_UPDATE_URL;
     const r = await updater.checkForUpdate(app.getVersion(), { url: override || undefined, allowLocal: !!override });
-    if (r.status !== 'error') { settings.lastUpdateCheck = Date.now(); saveSettings(); }
+    updater.recordCheck(settings); saveSettings();   // failures count too: at most one check per 24 h
     updInfo = r.status === 'available' ? r.info : null;
     if (r.status === 'available') return { status: !manual && settings.skipVersion === r.info.version ? 'skipped' : 'available', version: r.info.version, notes: r.info.notes, size: r.info.size };
     return { status: r.status, version: r.info ? r.info.version : '' };
