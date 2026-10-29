@@ -4,7 +4,6 @@
 namespace
 {
 const juce::Colour kBg (0xff0c0c0c), kPanel (0xff181818), kPri (0xffffffff), kSec (0xffb8b8b8), kDim (0xff9f9f9f), kTrack (0xff2d2d2d);
-constexpr int kFooterH = 22;
 
 using vzui::uiFont;
 

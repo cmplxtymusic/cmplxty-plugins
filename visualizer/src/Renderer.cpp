@@ -65,7 +65,6 @@ inline u32 mulc (u32 c, float v) noexcept
     if (s <= 0) return 0xff000000u;
     return pack ((cr (c) * s) >> 8, (cg (c) * s) >> 8, (cb (c) * s) >> 8);
 }
-inline u32 addc (u32 a, u32 b) noexcept { return pack (cr (a) + cr (b), cg (a) + cg (b), cb (a) + cb (b)); }
 inline u32 maxc (u32 a, u32 b) noexcept { return 0xff000000u | (std::max (a & 0xff0000u, b & 0xff0000u)) | (std::max (a & 0xff00u, b & 0xff00u)) | (std::max (a & 0xffu, b & 0xffu)); }
 inline u32 lerpc (u32 a, u32 b, float t) noexcept
 {
