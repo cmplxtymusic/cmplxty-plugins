@@ -1,0 +1,104 @@
+# CMPLXTY Dark Reverb - CI for github.com/cmplxtymusic/cmplxty-plugins (project lives in the dark-reverb/ folder).
+# GitHub only reads workflows from the repository root: this file belongs at .github/workflows/dark-reverb.yml
+# (a copy is kept at dark-reverb/ci/dark-reverb.yml).
+# STATUS: written but never run on GitHub by the author. The Windows job mirrors the local, tested box build;
+# the macOS job has never run on a Mac. Installers are UNSIGNED (Windows SmartScreen / macOS Gatekeeper will warn).
+name: dark-reverb
+on:
+  workflow_dispatch:
+  push:
+    tags: ['dark-reverb-v*']
+    paths: ['dark-reverb/**', '.github/workflows/dark-reverb.yml']
+  pull_request:
+    paths: ['dark-reverb/**', '.github/workflows/dark-reverb.yml']
+defaults:
+  run:
+    shell: bash
+    working-directory: dark-reverb
+env:
+  LLVM_VERSION: '23.1.4'
+  XWIN_VERSION: '0.10.0'
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libxcomposite-dev libxext-dev libgl1-mesa-dev
+      - run: ./scripts/fetch-deps.sh
+      - name: Build VST3 + CLAP
+        run: |
+          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF -DCLAP_JUCE_EXTENSIONS_BUILD_EXAMPLES=OFF
+          cmake --build build/linux --target DarkReverb_VST3 DarkReverb_CLAP DarkReverbUpdateTest --parallel
+      - name: DSP + update-logic tests
+        run: |
+          g++ -std=c++17 -O2 test/dsp_test.cpp -o /tmp/dsp_test && /tmp/dsp_test
+          build/linux/DarkReverbUpdateTest_artefacts/Release/DarkReverbUpdateTest
+      - name: Package
+        run: |
+          mkdir -p ../out/linux
+          cp -r build/linux/DarkReverb_artefacts/Release/VST3 build/linux/DarkReverb_artefacts/Release/CLAP ../out/linux/
+          mkdir -p ../out/moduleinfo
+          cp "build/linux/DarkReverb_artefacts/Release/VST3/CMPLXTY Dark Reverb.vst3/Contents/Resources/moduleinfo.json" ../out/moduleinfo/
+      - uses: actions/upload-artifact@v4
+        with: { name: dark-reverb-linux, path: out/linux }
+      - uses: actions/upload-artifact@v4
+        with: { name: moduleinfo, path: out/moduleinfo }
+
+  windows:
+    # cross-compiled on Linux with clang-cl + xwin (static /MT CRT, no Visual C++ redistributable needed), packed with NSIS
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: moduleinfo, path: dark-reverb/build/linux/DarkReverb_artefacts/Release/VST3/CMPLXTY Dark Reverb.vst3/Contents/Resources }
+      - name: Tools (NSIS, ninja, host compiler for juceaide)
+        run: sudo apt-get update && sudo apt-get install -y nsis ninja-build g++ libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev
+      - uses: actions/cache@v4
+        id: toolcache
+        with:
+          path: |
+            ~/.local/llvm
+            ~/.local/xwin-sdk
+          key: llvm-${{ env.LLVM_VERSION }}-xwin-${{ env.XWIN_VERSION }}
+      - name: LLVM + Windows SDK/CRT (xwin; accepting the Microsoft licence)
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/llvm ~/.local/bin /tmp/dl && cd /tmp/dl
+          curl -fsSL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/LLVM-$LLVM_VERSION-Linux-X64.tar.xz"
+          tar -xf llvm.tar.xz -C ~/.local/llvm --strip-components=1
+          curl -fsSL -o xwin.tar.gz "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf xwin.tar.gz --strip-components=1 -C ~/.local/bin
+          ~/.local/bin/xwin --accept-license --arch x86_64 --variant desktop splat --output ~/.local/xwin-sdk
+      - run: ./scripts/fetch-deps.sh
+      - run: ./scripts/build-windows-xwin.sh
+      - run: ./scripts/build-installer.sh
+      - name: Checksum
+        run: cd dist && sha256sum CMPLXTY-Dark-Reverb-Setup-*-win.exe | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dark-reverb-windows-installer
+          path: |
+            dark-reverb/dist/CMPLXTY-Dark-Reverb-Setup-*-win.exe
+            dark-reverb/dist/SHA256SUMS
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja
+      - run: ./scripts/fetch-deps.sh
+      - name: Universal VST3 + CLAP -> .pkg
+        run: ./scripts/build-macos-pkg.sh
+      - name: Checksum
+        run: cd dist && shasum -a 256 CMPLXTY-Dark-Reverb-Setup-*-mac.pkg | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dark-reverb-macos-installer
+          path: |
+            dark-reverb/dist/CMPLXTY-Dark-Reverb-Setup-*-mac.pkg
+            dark-reverb/dist/SHA256SUMS
