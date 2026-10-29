@@ -1,5 +1,6 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "PresetKit.h"
 #include "UpdateCheck.h"
 #include "HostKeys.h"
 
@@ -222,6 +223,12 @@ private:
     juce::TextButton undoBtn { "UNDO" }, redoBtn { "REDO" };
     juce::Rectangle<int> bandArea[3], shiftArea, stereoArea, outArea, keyArea, footerArea;
     dfui::PopupOverlay popup;
+    pk::PresetBar presetBar { proc.presets };
+    pk::PresetMenu presetMenu;
+public:
+    pk::PresetBar& getPresetBar() { return presetBar; }
+    pk::PresetMenu& getPresetMenu() { return presetMenu; }
+private:
     dfui::UpdateBanner banner;
     df::upd::Checker checker;
     df::upd::Info bannerInfo;

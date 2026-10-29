@@ -583,15 +583,24 @@ DriftPanel::DriftPanel (DriftProcessor& p, juce::AudioProcessorEditor& o) : proc
     {
         const auto page = df::upd::pageForUrl (bannerInfo.url);
         if (df::upd::isTrustedUrl (page)) juce::URL (page).launchInDefaultBrowser();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
-    banner.onLater = [this] { banner.setVisible (false); footerNote = {}; repaint(); };
+    banner.onLater = [this] { banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint(); };
     banner.onSkip = [this]
     {
         auto s = df::upd::Settings::load(); s.skipVersion = bannerInfo.version; s.save();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
     addChildComponent (popup);
+    // preset bar (top right; the update banner takes its place while shown).  Mouse only: no part of it ever takes keyboard focus.
+    addAndMakeVisible (presetBar); addChildComponent (presetMenu);
+    presetBar.setLookAndFeel (&look);
+    presetBar.font = presetMenu.font = [] (float h) { return uiFont (h); };
+    presetBar.bg = kPanel; presetBar.line = kSec.withAlpha (0.35f); presetBar.dim = kDim;
+    presetMenu.bg = juce::Colour (0xff202020); presetMenu.line = kSec.withAlpha (0.7f); presetMenu.hi = kTrack; presetMenu.tick = kPri; presetMenu.dim = kDim;
+    presetBar.showMenu = [this] (std::vector<pk::MenuItem> items, juce::Rectangle<int> a) { popup.dismiss(); presetMenu.show (a + presetBar.getPosition(), std::move (items)); };
+    presetBar.afterDialog = [this] { hostkeys::releaseLater (*this); };
+    presetMenu.onDismiss = [this] { hostkeys::release (*this); };
 
     updatesOn = df::upd::Settings::load().enabled;
     setWantsKeyboardFocus (false);            // never hold keyboard focus: Space & co. must keep driving the host transport
@@ -617,6 +626,7 @@ DriftPanel::~DriftPanel()
     for (auto* s : { &shiftSec, &wideSec, &keySec }) { s->power.setLookAndFeel (nullptr); s->label.setLookAndFeel (nullptr); }
     undoBtn.setLookAndFeel (nullptr); redoBtn.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
+    presetBar.setLookAndFeel (nullptr);
 }
 
 // Only acts when the plug-in window really holds the native keyboard focus and nothing needs it (no popup, no value being typed, no combo menu):
@@ -647,7 +657,7 @@ void DriftPanel::startUpdateCheck (bool force)
 void DriftPanel::showBanner (const df::upd::Info& i)
 {
     bannerInfo = i;
-    banner.show (i);
+    banner.show (i); presetBar.setVisible (false); presetMenu.dismiss();
     footerNote = i.notes.isNotEmpty() ? "What's new: " + i.notes : juce::String();
     resized(); repaint();
 }
@@ -890,6 +900,8 @@ void DriftPanel::resized()
     }
     undoBtn.setBounds (352, 12, 56, 24); redoBtn.setBounds (412, 12, 56, 24);
     banner.setBounds (W - 12 - 392, 9, 392, 28);
+    presetBar.setBounds (W - 12 - 390, 10, 390, 26);
+    presetMenu.setBounds (getLocalBounds());
     popup.setBounds (getLocalBounds());
 }
 

@@ -1,5 +1,6 @@
 // Renders the real DriftEditor to a PNG.  usage: DriftScreenshot out.png [banner|menu|eco|solo|removed|big|keys|params]
 #include "PluginEditor.h"
+#include "PresetKitTest.h"
 
 namespace
 {
@@ -41,6 +42,7 @@ int main (int argc, char** argv)
     { df::upd::Settings s; s.enabled = true; s.save();
       auto* o = new juce::DynamicObject(); o->setProperty ("checked", (juce::int64) (juce::Time::currentTimeMillis() / 1000)); o->setProperty ("ok", false);
       df::upd::writeJson (df::upd::dataDir().getChildFile ("update-cache.json"), juce::var (o)); }
+    if (mode == "proc") return pk::test::procTests<DriftProcessor> ([] (DriftProcessor& q) -> pk::PresetManager& { return q.presets; }, df::upd::dataDir().getChildFile ("Presets"));
     DriftProcessor proc;
     // a lively, non-default looking state
     auto set = [&] (const char* id, float v) { if (auto* p = proc.apvts.getParameter (id)) p->setValueNotifyingHost (p->convertTo0to1 (v)); };
@@ -58,6 +60,7 @@ int main (int argc, char** argv)
         std::printf ("%d params, %d not automatable\n", proc.getParameters().size(), bad);
         return bad;
     }
+    if (mode.isEmpty() || mode == "presets") proc.presets.loadFactory (2);
     if (mode == "removed") { set ("lowBand", 0.0f); set ("keyOn", 1.0f); }
     if (mode == "solo") set ("soloMid", 1.0f);
     if (mode == "eco") set ("eco", 1.0f);
@@ -70,10 +73,12 @@ int main (int argc, char** argv)
     {
         auto r = e->getPanel().auditKeyboard(); std::printf ("%s", r.toRawUTF8());
         auto m = e->getPanel().auditMenus();    std::printf ("%s", m.toRawUTF8());
-        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK")) ? 0 : 1;
+        auto pa = pk::test::auditPresets (e->getPanel(), e->getPanel().getPresetBar(), e->getPanel().getPresetMenu(), proc.presets); std::printf ("%s", pa.toRawUTF8());
+        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK") && pa.contains ("PRESET AUDIT OK")) ? 0 : 1;
     }
     feed (proc, 48000.0, 1.5);
     if (mode == "menu") e->getPanel().demoKnobMenu();
+    if (mode == "presets") e->getPanel().getPresetBar().openMenu();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     feed (proc, 48000.0, 0.3);
     juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
