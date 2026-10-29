@@ -1,0 +1,211 @@
+diff --git a/modules/juce_audio_processors/processors/juce_AudioPluginInstance.h b/modules/juce_audio_processors/processors/juce_AudioPluginInstance.h
+index 2f70906..4ae95d4 100644
+--- a/modules/juce_audio_processors/processors/juce_AudioPluginInstance.h
++++ b/modules/juce_audio_processors/processors/juce_AudioPluginInstance.h
+@@ -169,8 +169,6 @@ protected:
+ 
+     AudioPluginInstance() = default;
+     AudioPluginInstance (const BusesProperties& ioLayouts) : AudioProcessor (ioLayouts) {}
+-    template <size_t numLayouts>
+-    AudioPluginInstance (const short channelLayoutList[numLayouts][2]) : AudioProcessor (channelLayoutList) {}
+ 
+ private:
+     // It's not safe to add a plain AudioProcessorParameter to an AudioPluginInstance.
+diff --git a/modules/juce_core/system/juce_TargetPlatform.h b/modules/juce_core/system/juce_TargetPlatform.h
+index ee433d3..8a25651 100644
+--- a/modules/juce_core/system/juce_TargetPlatform.h
++++ b/modules/juce_core/system/juce_TargetPlatform.h
+@@ -97,7 +97,7 @@
+ 
+ //==============================================================================
+ #if JUCE_WINDOWS
+-  #ifdef _MSC_VER
++  #if defined (_MSC_VER) || defined (__MINGW32__)
+     #ifdef _WIN64
+       #define JUCE_64BIT 1
+     #else
+@@ -109,9 +109,7 @@
+     #define JUCE_DEBUG 1
+   #endif
+ 
+-  #ifdef __MINGW32__
+-    #error "MinGW is not supported. Please use an alternative compiler."
+-  #endif
++  // Quartz patch: llvm-mingw (clang) allowed
+ 
+   /** If defined, this indicates that the processor is little-endian. */
+   #define JUCE_LITTLE_ENDIAN 1
+diff --git a/modules/juce_graphics/native/juce_DirectX_windows.cpp b/modules/juce_graphics/native/juce_DirectX_windows.cpp
+index e8f5079..36144e7 100644
+--- a/modules/juce_graphics/native/juce_DirectX_windows.cpp
++++ b/modules/juce_graphics/native/juce_DirectX_windows.cpp
+@@ -613,7 +613,7 @@ DxgiAdapter::Ptr Direct2DDeviceResources::findAdapter (const DxgiAdapters& adapt
+ 
+     ComSmartPtr<IDXGIDevice> device;
+     JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wlanguage-extension-token")
+-    surface->GetDevice (__uuidof (device), (void**) device.resetAndGetPointerAddress());
++    surface->GetDevice (__uuidof (IDXGIDevice), (void**) device.resetAndGetPointerAddress());
+     JUCE_END_IGNORE_WARNINGS_GCC_LIKE
+ 
+     return findAdapter (adapters, device);
+diff --git a/modules/juce_gui_basics/juce_gui_basics.cpp b/modules/juce_gui_basics/juce_gui_basics.cpp
+index 1ee4e70..9e1b49d 100644
+--- a/modules/juce_gui_basics/juce_gui_basics.cpp
++++ b/modules/juce_gui_basics/juce_gui_basics.cpp
+@@ -111,7 +111,7 @@
+  #if ! JUCE_DONT_AUTOLINK_TO_WIN32_LIBRARIES
+   #pragma comment(lib, "vfw32.lib")
+   #pragma comment(lib, "imm32.lib")
+-  #pragma comment(lib, "comctl32.lib")
++  // Quartz patch: no static comctl32 link (see juce_NativeMessageBox_windows.cpp)
+   #pragma comment(lib, "dwmapi.lib")
+ 
+   // Link a newer version of the side-by-side comctl32 dll.
+diff --git a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+index adb1e3b..756789d 100644
+--- a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+@@ -141,7 +141,7 @@ public:
+ 
+         ComSmartPtr<IDXGIDevice> device;
+         JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wlanguage-extension-token")
+-        chain->GetDevice (__uuidof (device), (void**) device.resetAndGetPointerAddress());
++        chain->GetDevice (__uuidof (IDXGIDevice), (void**) device.resetAndGetPointerAddress());
+         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
+ 
+         createBuffer (Direct2DDeviceResources::findAdapter (directX->adapters, device));
+@@ -193,7 +193,7 @@ private:
+ 
+         ComSmartPtr<IDXGISurface> surface;
+         JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wlanguage-extension-token")
+-        if (const auto hr = chain->GetBuffer (0, __uuidof (surface), reinterpret_cast<void**> (surface.resetAndGetPointerAddress())); FAILED (hr))
++        if (const auto hr = chain->GetBuffer (0, __uuidof (IDXGISurface), reinterpret_cast<void**> (surface.resetAndGetPointerAddress())); FAILED (hr))
+             return nullptr;
+         JUCE_END_IGNORE_WARNINGS_GCC_LIKE
+ 
+@@ -297,6 +297,22 @@ private:
+ };
+ 
+ //==============================================================================
++// Quartz patch: comctl32 subclass helpers are resolved at run time so the DLL has no static COMCTL32 import.
++namespace QuartzComctl
++{
++    template <typename Fn> Fn get (const char* name)
++    {
++        auto m = LoadLibraryW (L"comctl32.dll");
++        return m != nullptr ? (Fn) (void*) GetProcAddress (m, name) : nullptr;
++    }
++    inline BOOL setSub (HWND h, SUBCLASSPROC p, UINT_PTR id, DWORD_PTR d)
++    { static auto f = get<BOOL (WINAPI*) (HWND, SUBCLASSPROC, UINT_PTR, DWORD_PTR)> ("SetWindowSubclass"); return f != nullptr ? f (h, p, id, d) : FALSE; }
++    inline BOOL remSub (HWND h, SUBCLASSPROC p, UINT_PTR id)
++    { static auto f = get<BOOL (WINAPI*) (HWND, SUBCLASSPROC, UINT_PTR)> ("RemoveWindowSubclass"); return f != nullptr ? f (h, p, id) : FALSE; }
++    inline LRESULT defSub (HWND h, UINT m, WPARAM w, LPARAM l)
++    { static auto f = get<LRESULT (WINAPI*) (HWND, UINT, WPARAM, LPARAM)> ("DefSubclassProc"); return f != nullptr ? f (h, m, w, l) : DefWindowProcW (h, m, w, l); }
++}
++
+ struct Direct2DHwndContext::HwndPimpl : public Direct2DGraphicsContext::Pimpl
+ {
+ private:
+@@ -306,12 +322,12 @@ private:
+             : owner (ownerIn),
+               swapChainEventHandle (swapHandle)
+         {
+-            SetWindowSubclass (owner.hwnd, subclassWindowProc, (UINT_PTR) this, (DWORD_PTR) this);
++            QuartzComctl::setSub (owner.hwnd, subclassWindowProc, (UINT_PTR) this, (DWORD_PTR) this);
+         }
+ 
+         ~SwapChainThread()
+         {
+-            RemoveWindowSubclass (owner.hwnd, subclassWindowProc, (UINT_PTR) this);
++            QuartzComctl::remSub (owner.hwnd, subclassWindowProc, (UINT_PTR) this);
+             SetEvent (quitEvent.getHandle());
+             thread.join();
+         }
+@@ -350,7 +366,7 @@ private:
+             if (that != nullptr && that->handleWindowProcMessage (message))
+                 return 0;
+ 
+-            return DefSubclassProc (hwnd, message, wParam, lParam);
++            return QuartzComctl::defSub (hwnd, message, wParam, lParam);
+         }
+ 
+         void threadLoop()
+diff --git a/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp b/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
+index 9be087d..3ce4156 100644
+--- a/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
+@@ -168,7 +168,23 @@ std::unique_ptr<ScopedMessageBoxInterface> ScopedMessageBoxInterface::create (co
+                 config.cButtons = (UINT) buttonLabels.size();
+ 
+                 int buttonIndex = 0;
+-                TaskDialogIndirect (&config, &buttonIndex, nullptr, nullptr);
++                // Quartz patch: TaskDialogIndirect only exists in comctl32 v6 (needs an activation manifest in the host process).
++                // Resolve it at run time so the plug-in loads in hosts without that manifest, and fall back to MessageBoxW.
++                using TaskDialogIndirectFn = HRESULT (WINAPI*) (const TASKDIALOGCONFIG*, int*, int*, BOOL*);
++                TaskDialogIndirectFn taskDialogFn = nullptr;
++                if (auto comctl = LoadLibraryW (L"comctl32.dll"))
++                    taskDialogFn = (TaskDialogIndirectFn) (void*) GetProcAddress (comctl, "TaskDialogIndirect");
++
++                if (taskDialogFn == nullptr || FAILED (taskDialogFn (&config, &buttonIndex, nullptr, nullptr)))
++                {
++                    UINT type = MB_TOPMOST;
++                    type |= buttonLabels.size() >= 3 ? MB_YESNOCANCEL : buttonLabels.size() == 2 ? MB_YESNO : MB_OK;
++                    if (options.getIconType() == MessageBoxIconType::WarningIcon) type |= MB_ICONWARNING;
++                    else if (options.getIconType() == MessageBoxIconType::InfoIcon) type |= MB_ICONINFORMATION;
++                    else if (options.getIconType() == MessageBoxIconType::QuestionIcon) type |= MB_ICONQUESTION;
++                    const auto r = MessageBoxW (parent, message.toWideCharPointer(), title.toWideCharPointer(), type);
++                    buttonIndex = (r == IDYES || r == IDOK) ? 0 : r == IDNO ? 1 : (buttonLabels.size() >= 3 ? 2 : 0);
++                }
+ 
+                 return buttonIndex;
+             };
+diff --git a/modules/juce_gui_basics/native/juce_VBlank_windows.cpp b/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
+index 93e2bde..5a570d8 100644
+--- a/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
+@@ -136,6 +136,10 @@ private:
+             }
+             else
+             {
++                // Quartz: WaitForVBlank() can fail (virtual/remote displays); the exit flag must still be honoured or ~VBlankThread() hangs forever.
++                if ((state.load() & flagExit) != 0)
++                    return;
++
+                 sleep (1);
+             }
+         }
+diff --git a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+index c89140b..5660959 100644
+--- a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+@@ -3931,10 +3931,14 @@ private:
+                         RECT client{};
+                         ::GetWindowRect (h, &client);
+ 
+-                        const auto dpi = GetDpiForWindow (hwnd);
+-                        const auto padding = GetSystemMetricsForDpi (SM_CXPADDEDBORDER, dpi);
+-                        const auto borderX = GetSystemMetricsForDpi (SM_CXFRAME, dpi) + padding;
+-                        const auto borderY = GetSystemMetricsForDpi (SM_CYFRAME, dpi) + padding;
++                        // Quartz patch: GetDpiForWindow/GetSystemMetricsForDpi are Windows 10 1607+, resolve at run time (no static import)
++                        static const auto qzGetDpiForWindow = (GetDPIForWindowFunc) getUser32Function ("GetDpiForWindow");
++                        static const auto qzGetMetricsForDpi = (GetSystemMetricsForDpiFunc) getUser32Function ("GetSystemMetricsForDpi");
++                        const auto dpi = qzGetDpiForWindow != nullptr ? qzGetDpiForWindow (hwnd) : 96u;
++                        const auto metric = [&] (int index) { return qzGetMetricsForDpi != nullptr ? qzGetMetricsForDpi (index, dpi) : GetSystemMetrics (index); };
++                        const auto padding = metric (SM_CXPADDEDBORDER);
++                        const auto borderX = metric (SM_CXFRAME) + padding;
++                        const auto borderY = metric (SM_CYFRAME) + padding;
+ 
+                         const auto left   = cursor.x < client.left + borderX;
+                         const auto right  = client.right - borderX < cursor.x;
+@@ -4806,7 +4810,11 @@ private:
+ 
+ ComponentPeer* Component::createNewPeer (int styleFlags, void* parentHWND)
+ {
++   #if defined (__MINGW32__) // Quartz: Direct2D is not validated with MinGW builds, default to the GDI software renderer
++    return new HWNDComponentPeer { *this, styleFlags, (HWND) parentHWND, false, 0 };
++   #else
+     return new HWNDComponentPeer { *this, styleFlags, (HWND) parentHWND, false, 1 };
++   #endif
+ }
+ 
+ Image createSnapshotOfNativeWindow (void* nativeWindowHandle)

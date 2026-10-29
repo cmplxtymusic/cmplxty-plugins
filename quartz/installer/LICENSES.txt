@@ -1,0 +1,15 @@
+Quartz - vocal alchemy
+Copyright (c) Quartz Audio
+
+Quartz is built with the JUCE framework (https://juce.com), used under the GNU Affero General Public License v3
+(AGPLv3). A patched JUCE 8.0.9 (MinGW compatibility, GDI default renderer, VBlank shutdown fix) is used.
+Because of the AGPLv3, the complete corresponding source code of this plug-in, including the JUCE patch and the
+installer script, is available on request from the publisher and from the download page.
+
+VST is a trademark of Steinberg Media Technologies GmbH. The VST3 interface headers are used under the
+VST 3 SDK licence (dual GPLv3 / Steinberg proprietary).
+
+Fonts embedded in the user interface (SIL Open Font License 1.1):
+  Cinzel (c) The Cinzel Project Authors
+  Inter  (c) The Inter Project Authors
+  Geist Mono (c) Vercel / Basement Studio

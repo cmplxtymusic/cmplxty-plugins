@@ -1,0 +1,26 @@
+# Quartz - macOS CI (universal VST3, ad-hoc signed .pkg); project lives in quartz/. Windows is still built locally (MinGW, see quartz/BUILD.txt).
+name: quartz
+on:
+  workflow_dispatch:
+  push:
+    tags: ['quartz-v*']
+defaults:
+  run:
+    shell: bash
+    working-directory: quartz
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja || true
+      - name: Universal VST3 -> .pkg (+ update-check test)
+        run: ./scripts/build-macos-pkg.sh
+      - name: Checksum
+        run: cd dist && shasum -a 256 CMPLXTY-Quartz-Setup-*-mac.pkg | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quartz-macos-installer
+          path: |
+            quartz/dist/CMPLXTY-Quartz-Setup-*-mac.pkg
+            quartz/dist/SHA256SUMS

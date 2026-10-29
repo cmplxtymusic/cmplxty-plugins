@@ -1,0 +1,8 @@
+Quartz 1.0.4 source (AGPLv3). Not included in the zip: JUCE 8.0.9 (get tag 8.0.9 from https://github.com/juce-framework/JUCE, copy to ./JUCE, then
+  git -C JUCE apply ../patches/juce-8.0.9-mingw.patch    (MinGW cross-build fixes, GDI renderer default for MinGW, VBlank exit fix).
+Toolchain (all free): llvm-mingw (ucrt, x86_64), CMake, Ninja, NSIS 3.11 for installer/quartz.nsi.
+Configure: cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw.cmake -DCMAKE_BUILD_TYPE=Release ; cmake --build build
+Strip: llvm-strip --strip-all Quartz.vst3
+Installer: makensis -DVERSION=1.0.4 -DPAYLOAD=Quartz.vst3 -DOUTFILE=Quartz-Setup.exe installer/quartz.nsi
+Tests (static mingw, run under wine or Windows): tests/dsp_test.cpp chain_test.cpp preset_test.cpp vst3_host_test.cpp alter_render.cpp
+UI + update tests (CMake targets QuartzUiTest [Linux, needs Xvfb + a window manager], QuartzUpdateTest [any; --net PORT with tests/update_server.py]); see tests/ and README.md.

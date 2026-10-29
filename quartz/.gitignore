@@ -1,0 +1,4 @@
+JUCE/
+build*/
+*.log
+dist/
