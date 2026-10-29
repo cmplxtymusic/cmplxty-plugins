@@ -1,0 +1,35 @@
+Hilbert pair: 90 degree phase difference, flat magnitudes
+  sr 44100: worst phase error 0.0202 deg, worst I/Q magnitude mismatch 0.00000 dB
+  sr 48000: worst phase error 0.0198 deg, worst I/Q magnitude mismatch 0.00000 dB
+  sr 96000: worst phase error 0.0198 deg, worst I/Q magnitude mismatch 0.00000 dB
+Shift accuracy and sideband rejection
+  sr  44100 shift  +500.6: peak 2500.54 Hz (want 2500.54), level -6.02 dB, image -90.9 dB
+  sr  44100 shift  -500.6: peak 1499.25 Hz (want 1499.25), level -6.02 dB, image -90.9 dB
+  sr  44100 shift +2999.8: peak 4999.74 Hz (want 4999.74), level -6.02 dB, image -300.0 dB
+  sr  44100 shift +9999.5: peak 11999.38 Hz (want 11999.38), level -6.02 dB, image -300.0 dB
+  sr  44100 shift    +5.4: peak 2005.28 Hz (want 2005.28), level -6.02 dB, image -90.9 dB
+  sr  48000 shift  +499.5: peak 2499.02 Hz (want 2499.02), level -6.02 dB, image -104.8 dB
+  sr  48000 shift  -499.5: peak 1500.00 Hz (want 1500.00), level -6.02 dB, image -104.8 dB
+  sr  48000 shift +3000.0: peak 4999.51 Hz (want 4999.51), level -6.02 dB, image -300.0 dB
+  sr  48000 shift +10000.5: peak 12000.00 Hz (want 12000.00), level -6.02 dB, image -300.0 dB
+  sr  48000 shift    +4.4: peak 2003.91 Hz (want 2003.91), level -6.02 dB, image -104.8 dB
+  sr  96000 shift  +501.0: peak 2501.95 Hz (want 2501.95), level -6.02 dB, image -81.3 dB
+  sr  96000 shift  -501.0: peak 1500.00 Hz (want 1500.00), level -6.02 dB, image -81.3 dB
+  sr  96000 shift +3000.0: peak 5000.98 Hz (want 5000.98), level -6.02 dB, image -300.0 dB
+  sr  96000 shift +9999.0: peak 12000.00 Hz (want 12000.00), level -6.02 dB, image -300.0 dB
+  sr  96000 shift    +5.9: peak 2006.84 Hz (want 2006.84), level -6.02 dB, image -81.3 dB
+Zero shift is an allpass (flat gain at every frequency), at any mix / band layout
+Only the middle band is shifted; solo / remove behave
+  default layout: low -14.0  mid(unshifted) -93.4  mid(shifted) -14.0  high -14.0 dB (ref -14.0)
+  leak into the shifted band at 0.75x crossover: 24 dB -18.4, 48 dB -26.9, 96 dB -46.2
+Mix, spread, keytrack, feedback
+  mix 50%: dry -12.04 dB shifted -12.04 dB
+  spread 200 Hz: L 1899.49 R 2099.53 (in 1999.51)
+  feedback 0.6: +200 -15.2, +400 -18.4, +600 -23.8 dB
+  feedback 0.95 on full-scale noise: max |y| 3.56
+Robustness: block sizes, random automation, extreme settings
+  largest sample-to-sample step during automation of a 0.5 tone at 2 kHz: 0.137 (a clean sine: 0.131)
+Spectrum analyser and sample tap
+CPU (this box, -O2, stereo, 96 dB slope, feedback, display tap on, 48 kHz): 71x real time (1.41 % of one core)
+
+126 checks, 0 failures
