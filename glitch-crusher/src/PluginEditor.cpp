@@ -303,6 +303,14 @@ GlitchCrusherEditor::GlitchCrusherEditor (GlitchCrusherProcessor& p) : AudioProc
         banner.setVisible (false); footerNote = {}; repaint();
     };
     addChildComponent (popup);
+    addAndMakeVisible (presetBar); addChildComponent (presetMenu);
+    presetBar.setLookAndFeel (&look);
+    presetBar.font = presetMenu.font = [] (float h) { return uiFont (h); };
+    presetBar.bg = kPanel; presetBar.line = kCyan.withAlpha (0.35f); presetBar.dim = kDim;
+    presetMenu.bg = juce::Colour (0xff202020); presetMenu.line = kCyan.withAlpha (0.7f); presetMenu.hi = kMagenta.darker (0.4f); presetMenu.tick = kCyan; presetMenu.dim = kDim;
+    presetBar.showMenu = [this] (std::vector<pk::MenuItem> items, juce::Rectangle<int> a) { popup.dismiss(); presetMenu.show (a + presetBar.getPosition(), std::move (items)); };
+    presetBar.afterDialog = [this] { gcui::hostkeys::releaseLater (*this); };
+    presetMenu.onDismiss = [this] { gcui::hostkeys::release (*this); };
 
     updatesOn = gc::upd::Settings::load().enabled;
     setWantsKeyboardFocus (false);            // never hold keyboard focus: Space & co. must keep driving the host transport
@@ -326,12 +334,14 @@ GlitchCrusherEditor::~GlitchCrusherEditor()
     for (auto* c : { &rate, &rev, &ftype }) { c->box.setLookAndFeel (nullptr); c->label.setLookAndFeel (nullptr); }
     for (auto* s : { &crushSec, &glitchSec, &filterSec }) s->power.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
+    presetBar.setLookAndFeel (nullptr);
 }
 
 // Only acts when the plug-in window really holds the native keyboard focus and nothing needs it (no popup, no value being typed, no combo menu):
 // then the focus goes back to the host. Normally it never fires, because nothing in the editor asks for focus.
 void GlitchCrusherEditor::timerCallback()
 {
+    presetBar.setVisible (! banner.isVisible());
     gcui::hostkeys::remember (*this);
    #if GC_FOCUS_NET
     if (! popup.isOpen()) gcui::hostkeys::release (*this);
@@ -570,6 +580,8 @@ void GlitchCrusherEditor::resized()
         sec->power.setBounds (area2.getRight() - 50, area2.getY() + 4, 42, 16);
 
     banner.setBounds (getWidth() - 12 - 392, 9, 392, 28);
+    presetBar.setBounds (getWidth() - 12 - 330, 10, 330, 26);
+    presetMenu.setBounds (getLocalBounds());
     popup.setBounds (getLocalBounds());
 }
 
@@ -660,4 +672,27 @@ juce::String GlitchCrusherEditor::auditMenus()
     setHostContext (nullptr);
     out << (ok ? "MENU AUDIT OK\n" : "MENU AUDIT FAILED\n");
     return out;
+}
+
+// test hook: the preset bar / menu never take keyboard focus, prev / next / menu load presets, Space is never consumed
+juce::String GlitchCrusherEditor::auditPresets()
+{
+    juce::String r; int bad = 0;
+    auto chk = [&] (bool c, const juce::String& w) { r << (c ? "  ok   " : "  FAIL ") << w << "\n"; bad += c ? 0 : 1; };
+    bool anyFocus = presetBar.getWantsKeyboardFocus() || presetMenu.getWantsKeyboardFocus();
+    for (auto* c : presetBar.getChildren()) anyFocus = anyFocus || c->getWantsKeyboardFocus() || c->getMouseClickGrabsKeyboardFocus();
+    chk (! anyFocus, "preset bar, its buttons and the preset menu never want keyboard focus");
+    proc.presets.loadFactory (0);
+    chk (proc.presets.currentName() == pk::factoryPresets()[0].name, "factory preset 0 loads");
+    proc.presets.step (1);
+    chk (proc.presets.currentName() == pk::factoryPresets()[1].name, "next steps to preset 2");
+    proc.presets.step (-1); proc.presets.step (-1);
+    chk (proc.presets.indexOfCurrent (proc.presets.userFiles()) == proc.presets.numFactory() + proc.presets.userFiles().size() - 1, "prev wraps around to the last preset");
+    presetBar.openMenu();
+    chk (presetMenu.isOpen() && presetMenu.numItems() >= proc.presets.numFactory() + 4 && getLocalBounds().contains (presetMenu.panelBounds()), "menu opens with every preset + save / load, inside the window");
+    chk (! presetMenu.getWantsKeyboardFocus() && ! presetMenu.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey)), "open menu does not take focus or eat Space");
+    presetMenu.triggerForTest (3);
+    chk (! presetMenu.isOpen() && proc.presets.currentName() == pk::factoryPresets()[3].name, "clicking a menu item loads it and closes the menu");
+    r << (bad == 0 ? "PRESET AUDIT OK\n" : "PRESET AUDIT FAILED\n");
+    return r;
 }

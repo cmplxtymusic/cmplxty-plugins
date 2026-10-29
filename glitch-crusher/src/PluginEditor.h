@@ -1,5 +1,6 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "PresetKit.h"
 #include "UpdateCheck.h"
 #include "HostKeys.h"
 
@@ -168,6 +169,13 @@ private:
     Section crushSec, glitchSec, filterSec;
     juce::Rectangle<int> crushArea, glitchArea, filterArea, outArea, footerArea;
     gcui::PopupOverlay popup;
+    pk::PresetBar presetBar { proc.presets };
+    pk::PresetMenu presetMenu;
+public:
+    pk::PresetBar& getPresetBar() { return presetBar; }
+    pk::PresetMenu& getPresetMenu() { return presetMenu; }
+    juce::String auditPresets();
+private:
     gcui::UpdateBanner banner;
     gc::upd::Checker checker;
     gc::upd::Info bannerInfo;

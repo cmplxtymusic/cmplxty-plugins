@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "GlitchCrusherDSP.h"
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 
 class GlitchCrusherProcessor final : public juce::AudioProcessor
 {
@@ -32,6 +34,7 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    pk::PresetManager presets { apvts, nullptr, "CMPLXTY Glitch Crusher", gc::upd::dataDir(), GC_VERSION_STRING };
 
 private:
     gc::Engine engine;
