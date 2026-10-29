@@ -2,6 +2,7 @@
 #include "PluginProcessor.h"
 #include "UpdateCheck.h"
 #include "HostKeys.h"
+#include "PresetKit.h"
 
 // 1.0.1: when 1, a 10 Hz check hands the native keyboard focus back to the host if the plug-in ever ends up holding it (e.g. after a combo box popup).
 // The real fix is that nothing in the editor wants keyboard focus; set to 0 to test that on its own.
@@ -191,6 +192,12 @@ private:
     juce::Rectangle<int> footerArea;
     drui::PopupOverlay popup;
     drui::UpdateBanner banner;
+    pk::PresetBar presetBar { proc.presets };
+    pk::PresetMenu presetMenu;
+public:
+    pk::PresetBar& getPresetBar() { return presetBar; }
+    pk::PresetMenu& getPresetMenu() { return presetMenu; }
+private:
     dr::upd::Checker checker;
     dr::upd::Info bannerInfo;
     juce::String footerNote;
