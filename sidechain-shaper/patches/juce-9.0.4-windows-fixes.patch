@@ -1,0 +1,58 @@
+diff --git a/modules/juce_gui_basics/juce_gui_basics.cpp b/modules/juce_gui_basics/juce_gui_basics.cpp
+index 382c7db..1cc8281 100644
+--- a/modules/juce_gui_basics/juce_gui_basics.cpp
++++ b/modules/juce_gui_basics/juce_gui_basics.cpp
+@@ -112,7 +112,7 @@
+  #if ! JUCE_DONT_AUTOLINK_TO_WIN32_LIBRARIES
+   #pragma comment(lib, "vfw32.lib")
+   #pragma comment(lib, "imm32.lib")
+-  #pragma comment(lib, "comctl32.lib")
++  // Glitch Crusher patch: no static comctl32 link (TaskDialogIndirect is resolved at run time, see juce_NativeMessageBox_windows.cpp)
+   #pragma comment(lib, "dwmapi.lib")
+   #pragma comment(lib, "shcore.lib")
+ 
+diff --git a/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp b/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
+index 5a67083..bb07884 100644
+--- a/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_NativeMessageBox_windows.cpp
+@@ -168,7 +168,24 @@ std::unique_ptr<ScopedMessageBoxInterface> ScopedMessageBoxInterface::create (co
+                 config.cButtons = (UINT) buttonLabels.size();
+ 
+                 int buttonIndex = 0;
+-                TaskDialogIndirect (&config, &buttonIndex, nullptr, nullptr);
++                // Glitch Crusher patch: TaskDialogIndirect only exists in comctl32 v6 (needs an activation manifest in the host process).
++                // A static import makes the plug-in fail to load in hosts without that manifest (e.g. FL Studio). Resolve it at run time
++                // and fall back to MessageBoxW.
++                using TaskDialogIndirectFn = HRESULT (WINAPI*) (const TASKDIALOGCONFIG*, int*, int*, BOOL*);
++                TaskDialogIndirectFn taskDialogFn = nullptr;
++                if (auto comctl = LoadLibraryW (L"comctl32.dll"))
++                    taskDialogFn = (TaskDialogIndirectFn) (void*) GetProcAddress (comctl, "TaskDialogIndirect");
++
++                if (taskDialogFn == nullptr || FAILED (taskDialogFn (&config, &buttonIndex, nullptr, nullptr)))
++                {
++                    UINT type = MB_TOPMOST;
++                    type |= buttonLabels.size() >= 3 ? MB_YESNOCANCEL : buttonLabels.size() == 2 ? MB_YESNO : MB_OK;
++                    if (options.getIconType() == MessageBoxIconType::WarningIcon) type |= MB_ICONWARNING;
++                    else if (options.getIconType() == MessageBoxIconType::InfoIcon) type |= MB_ICONINFORMATION;
++                    else if (options.getIconType() == MessageBoxIconType::QuestionIcon) type |= MB_ICONQUESTION;
++                    const auto r = MessageBoxW (parent, message.toWideCharPointer(), title.toWideCharPointer(), type);
++                    buttonIndex = (r == IDYES || r == IDOK) ? 0 : r == IDNO ? 1 : (buttonLabels.size() >= 3 ? 2 : 0);
++                }
+ 
+                 return buttonIndex;
+             };
+diff --git a/modules/juce_gui_basics/native/juce_VBlank_windows.cpp b/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
+index afc69c7..0c268fa 100644
+--- a/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_VBlank_windows.cpp
+@@ -136,6 +136,10 @@ private:
+             }
+             else
+             {
++                // Glitch Crusher: WaitForVBlank() can fail (Wine, virtual / remote displays); honour the exit flag or ~VBlankThread() hangs forever.
++                if ((state.load() & flagExit) != 0)
++                    return;
++
+                 sleep (1);
+             }
+         }
