@@ -36,7 +36,9 @@ const U = require('../src/updater');
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + srv.address().port;
-  const opts = { url: base + '/v.json', allowLocal: true, timeoutMs: 800 };
+  // These fixtures are the Windows update file (no "mac" block). Pin the platform so a Mac CI runner
+  // does not take the darwin path, which treats a Windows-only release as "nothing new".
+  const opts = { url: base + '/v.json', allowLocal: true, timeoutMs: 800, platform: 'win32' };
 
   let r = await U.checkForUpdate('2.0.0', opts); assert.strictEqual(r.status, 'available'); assert.strictEqual(r.info.version, '2.1.0');
   // sends no identifiers: no cookie, no user agent, no custom headers
@@ -46,7 +48,7 @@ const U = require('../src/updater');
   mode = '500'; r = await U.checkForUpdate('2.0.0', opts); assert.strictEqual(r.status, 'error');
   mode = 'junk'; r = await U.checkForUpdate('2.0.0', opts); assert.strictEqual(r.status, 'error');
   mode = 'hang'; const t0 = Date.now(); r = await U.checkForUpdate('2.0.0', opts); assert.strictEqual(r.status, 'error'); assert.ok(Date.now() - t0 < 3000, 'timeout is short');
-  r = await U.checkForUpdate('2.0.0', { url: 'http://127.0.0.1:1/v.json', timeoutMs: 500 }); assert.strictEqual(r.status, 'error');   // nothing listening: silent error, no throw
+  r = await U.checkForUpdate('2.0.0', { url: 'http://127.0.0.1:1/v.json', timeoutMs: 500, platform: 'win32' }); assert.strictEqual(r.status, 'error');   // nothing listening: silent error, no throw
   mode = 'evil'; r = await U.checkForUpdate('2.0.0', opts); assert.strictEqual(r.status, 'available'); assert.strictEqual(r.info.installer, '', 'installer from a foreign host is dropped');
 
   // download + verify

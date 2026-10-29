@@ -23,6 +23,10 @@ fi
 lipo -archs "$ROOT/Library/Audio/Plug-Ins/VST3/CMPLXTY Growl.vst3/Contents/MacOS/CMPLXTY Growl"
 mkdir -p dist
 OUT=dist/CMPLXTY-Growl-Setup-$VERSION-mac.pkg
-SIGN=(); [ -n "${DEV_ID_INSTALLER:-}" ] && SIGN=(--sign "$DEV_ID_INSTALLER")
-pkgbuild --root "$ROOT" --identifier com.cmplxty.growl-saturator --version "$VERSION" --install-location / "${SIGN[@]}" "$OUT"
+# macOS /bin/bash is 3.2: an empty array under `set -u` is an unbound variable, so do not expand SIGN[@] when unsigned.
+if [ -n "${DEV_ID_INSTALLER:-}" ]; then
+  pkgbuild --root "$ROOT" --identifier com.cmplxty.growl-saturator --version "$VERSION" --install-location / --sign "$DEV_ID_INSTALLER" "$OUT"
+else
+  pkgbuild --root "$ROOT" --identifier com.cmplxty.growl-saturator --version "$VERSION" --install-location / "$OUT"
+fi
 ls -l "$OUT"; shasum -a 256 "$OUT"
