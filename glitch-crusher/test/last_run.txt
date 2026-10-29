@@ -1,0 +1,106 @@
+== 1. Transparency at 16 bit / x1 / no fx ==
+  sr=44100 max |out-in| = 1.526e-05 (16-bit step = 3.052e-05)
+  sr=48000 max |out-in| = 1.526e-05 (16-bit step = 3.052e-05)
+== 2. Bit-depth quantiser ==
+  sr=44100 bits= 1 distinct levels=2 (max 2) max quant err=5.000e-01 (step/2=5.000e-01)
+  sr=44100 bits= 2 distinct levels=4 (max 4) max quant err=2.500e-01 (step/2=2.500e-01)
+  sr=44100 bits= 3 distinct levels=8 (max 8) max quant err=1.250e-01 (step/2=1.250e-01)
+  sr=44100 bits= 4 distinct levels=16 (max 16) max quant err=6.250e-02 (step/2=6.250e-02)
+  sr=44100 bits= 6 distinct levels=62 (max 64) max quant err=1.562e-02 (step/2=1.562e-02)
+  sr=44100 bits= 8 distinct levels=244 (max 256) max quant err=3.906e-03 (step/2=3.906e-03)
+  sr=44100 bits=12 distinct levels=3892 (max 4096) max quant err=2.441e-04 (step/2=2.441e-04)
+  sr=44100 bits=16 distinct levels=20462 (max 65536) max quant err=1.526e-05 (step/2=1.526e-05)
+  sr=48000 bits= 1 distinct levels=2 (max 2) max quant err=5.000e-01 (step/2=5.000e-01)
+  sr=48000 bits= 2 distinct levels=4 (max 4) max quant err=2.500e-01 (step/2=2.500e-01)
+  sr=48000 bits= 3 distinct levels=8 (max 8) max quant err=1.250e-01 (step/2=1.250e-01)
+  sr=48000 bits= 4 distinct levels=16 (max 16) max quant err=6.250e-02 (step/2=6.250e-02)
+  sr=48000 bits= 6 distinct levels=62 (max 64) max quant err=1.562e-02 (step/2=1.562e-02)
+  sr=48000 bits= 8 distinct levels=244 (max 256) max quant err=3.906e-03 (step/2=3.906e-03)
+  sr=48000 bits=12 distinct levels=3892 (max 4096) max quant err=2.441e-04 (step/2=2.441e-04)
+  sr=48000 bits=16 distinct levels=22118 (max 65536) max quant err=1.526e-05 (step/2=1.526e-05)
+== 3. Sample-rate reduction (hold) ==
+  sr=44100 factor=  1.0 -> mean hold length=1.000 samples, longest run=1
+  sr=44100 factor=  2.0 -> mean hold length=2.000 samples, longest run=4
+  sr=44100 factor=  4.0 -> mean hold length=4.000 samples, longest run=4
+  sr=44100 factor=  8.0 -> mean hold length=8.000 samples, longest run=8
+  sr=44100 factor= 16.0 -> mean hold length=16.000 samples, longest run=16
+  sr=44100 factor=  2.5 -> mean hold length=2.500 samples, longest run=5
+  sr=44100 factor= 64.0 -> mean hold length=64.000 samples, longest run=64
+  sr=48000 factor=  1.0 -> mean hold length=1.000 samples, longest run=1
+  sr=48000 factor=  2.0 -> mean hold length=2.000 samples, longest run=4
+  sr=48000 factor=  4.0 -> mean hold length=4.000 samples, longest run=4
+  sr=48000 factor=  8.0 -> mean hold length=8.000 samples, longest run=8
+  sr=48000 factor= 16.0 -> mean hold length=16.000 samples, longest run=16
+  sr=48000 factor=  2.5 -> mean hold length=2.500 samples, longest run=5
+  sr=48000 factor= 64.0 -> mean hold length=64.000 samples, longest run=64
+== 4. Tempo-synced glitch ==
+  sr=44100 rate=1/4 slice=22050 samples reverse=0  max|repeat-ref|=1.91e-05 over 20728 samples (align offset +0)
+  sr=44100 rate=1/4 slice=22050 samples reverse=1  max|repeat-ref|=1.91e-05 over 20728 samples (align offset +0)
+  sr=44100 rate=1/8 slice=11025 samples reverse=0  max|repeat-ref|=1.88e-05 over 9703 samples (align offset +0)
+  sr=44100 rate=1/8 slice=11025 samples reverse=1  max|repeat-ref|=1.92e-05 over 9703 samples (align offset +0)
+  sr=44100 rate=1/16 slice=5513 samples reverse=0  max|repeat-ref|=1.90e-05 over 4191 samples (align offset +0)
+  sr=44100 rate=1/16 slice=5513 samples reverse=1  max|repeat-ref|=1.89e-05 over 4191 samples (align offset +0)
+  sr=44100 rate=1/32 slice=2756 samples reverse=0  max|repeat-ref|=1.90e-05 over 1434 samples (align offset +0)
+  sr=44100 rate=1/32 slice=2756 samples reverse=1  max|repeat-ref|=1.82e-05 over 1434 samples (align offset +2)
+  sr=48000 rate=1/4 slice=24000 samples reverse=0  max|repeat-ref|=1.97e-05 over 22560 samples (align offset +0)
+  sr=48000 rate=1/4 slice=24000 samples reverse=1  max|repeat-ref|=1.95e-05 over 22560 samples (align offset +0)
+  sr=48000 rate=1/8 slice=12000 samples reverse=0  max|repeat-ref|=1.90e-05 over 10560 samples (align offset +0)
+  sr=48000 rate=1/8 slice=12000 samples reverse=1  max|repeat-ref|=1.95e-05 over 10560 samples (align offset +2)
+  sr=48000 rate=1/16 slice=6000 samples reverse=0  max|repeat-ref|=1.88e-05 over 4560 samples (align offset +0)
+  sr=48000 rate=1/16 slice=6000 samples reverse=1  max|repeat-ref|=1.92e-05 over 4560 samples (align offset +2)
+  sr=48000 rate=1/32 slice=3000 samples reverse=0  max|repeat-ref|=1.85e-05 over 1560 samples (align offset +0)
+  sr=48000 rate=1/32 slice=3000 samples reverse=1  max|repeat-ref|=1.89e-05 over 1560 samples (align offset +2)
+  probability test: p=0.30 -> measured 0.2868 over 3839 slices (1/32 @120 bpm)
+  p=0 -> glitchSlices=0, max|out-in|=1.53e-05
+== 5. Block-size independence (free-running transport, all fx on) ==
+  sr=44100 block=   1  max diff vs block=512: 0.000e+00
+  sr=44100 block=   7  max diff vs block=512: 0.000e+00
+  sr=44100 block=  32  max diff vs block=512: 0.000e+00
+  sr=44100 block=  64  max diff vs block=512: 0.000e+00
+  sr=44100 block= 480  max diff vs block=512: 0.000e+00
+  sr=44100 block= 512  max diff vs block=512: 0.000e+00
+  sr=44100 block=1023  max diff vs block=512: 0.000e+00
+  sr=44100 block=4096  max diff vs block=512: 0.000e+00
+  sr=48000 block=   1  max diff vs block=512: 0.000e+00
+  sr=48000 block=   7  max diff vs block=512: 0.000e+00
+  sr=48000 block=  32  max diff vs block=512: 0.000e+00
+  sr=48000 block=  64  max diff vs block=512: 0.000e+00
+  sr=48000 block= 480  max diff vs block=512: 0.000e+00
+  sr=48000 block= 512  max diff vs block=512: 0.000e+00
+  sr=48000 block=1023  max diff vs block=512: 0.000e+00
+  sr=48000 block=4096  max diff vs block=512: 0.000e+00
+== 6. Stress: random/extreme params every block, NaN/inf injected, mono/stereo, several rates ==
+  sr= 22050 ch=1 finite=1 peak=6.484
+  sr= 22050 ch=2 finite=1 peak=9.675
+  sr= 44100 ch=1 finite=1 peak=5.149
+  sr= 44100 ch=2 finite=1 peak=10.333
+  sr= 48000 ch=1 finite=1 peak=4.463
+  sr= 48000 ch=2 finite=1 peak=10.608
+  sr= 96000 ch=1 finite=1 peak=5.050
+  sr= 96000 ch=2 finite=1 peak=5.702
+  sr=192000 ch=1 finite=1 peak=2.929
+  sr=192000 ch=2 finite=1 peak=6.053
+  total blocks=7819 worst peak=10.608 (+12 dB gain & Q=10 resonance allowed)
+== 7. Gain / parameter smoothing (zipper check) ==
+  gain 0 -> -24 dB step: max sample-to-sample delta=0.0653 (unprocessed sine max delta=0.0653) at sample 24001
+  cutoff 18k->200 Hz + mix 1->0.2 jump: output finite, peak 0.550
+== 8. Mono / stereo consistency ==
+  sr=44100 mono vs stereo-L max diff=0.0e+00, L vs R (identical input) max diff=0.0e+00
+  sr=48000 mono vs stereo-L max diff=0.0e+00, L vs R (identical input) max diff=0.0e+00
+== 9. Real-time safety: heap allocations during process() ==
+  allocations in 4 s of audio (all fx, glitch p=1, random reverse): 0
+== 10. CPU cost & drum-loop sanity ==
+  sr=44100 20s stereo drum loop (all fx): 0.061 s CPU => 330.2x realtime (0.30% of one core), finite=1 peak=2.059 rms=0.391
+    same loop with Butterworth Q=0.707: peak=1.006
+  sr=48000 20s stereo drum loop (all fx): 0.065 s CPU => 307.3x realtime (0.33% of one core), finite=1 peak=1.931 rms=0.392
+    same loop with Butterworth Q=0.707: peak=1.007
+== 11. Section on/off switches (crush / glitch / filter) ==
+  sr=44100 all sections off vs input: max diff=0.0e+00
+  per-section on/off behave as bypass / active
+  sr=48000 all sections off vs input: max diff=0.0e+00
+  per-section on/off behave as bypass / active
+  toggle CRUSH off mid-stream: max step 0.0376 (steady-state max 0.0376)
+  toggle GLITCH off mid-stream: max step 0.0376 (steady-state max 0.0376)
+  toggle FILTER off mid-stream: max step 1.3726 (steady-state max 1.3750)
+
+RESULT: 118 checks passed, 0 failed
