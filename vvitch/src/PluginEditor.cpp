@@ -50,6 +50,57 @@ juce::Typeface::Ptr gothTypeface()
     static const juce::Typeface::Ptr t = juce::Typeface::createSystemTypefaceFor (BinaryData::UnifrakturMaguntiaBook_ttf, (size_t) BinaryData::UnifrakturMaguntiaBook_ttfSize);
     return t;
 }
+namespace
+{
+    float gothRunWidth (const juce::String& run, const juce::Font& f) { return juce::GlyphArrangement::getStringWidth (f, run); }
+    float vWidth (float h, bool upper) { return h * (upper ? 0.56f : 0.40f); }
+    // broad-nib V: heavy left stroke, hairline right stroke, sharp point on the baseline, angled flags at the top
+    void drawV (juce::Graphics& g, float x, float baseline, float capH, float w)
+    {
+        const float top = baseline - capH, th = w * 0.36f, hair = juce::jmax (1.2f, w * 0.12f), mid = x + w * 0.52f;
+        juce::Path p;
+        p.startNewSubPath (x + w * 0.02f, top + capH * 0.10f);       // left flag
+        p.lineTo (x + w * 0.02f + th, top);
+        p.lineTo (mid + th * 0.15f, baseline - capH * 0.18f);
+        p.lineTo (x + w - hair, top + capH * 0.06f);                   // right hairline
+        p.lineTo (x + w, top + capH * 0.06f + hair);
+        p.lineTo (mid, baseline);                                      // sharp point
+        p.closeSubPath();
+        g.fillPath (p);
+    }
+}
+float gothTextWidth (const juce::String& text, float h)
+{
+    const auto f = gothFont (h); float w = 0.0f; juce::String run;
+    for (auto c : text)
+    {
+        if (c == 'V' || c == 'v') { w += gothRunWidth (run, f) + vWidth (h, c == 'V') + h * 0.04f; run.clear(); }
+        else run << juce::String::charToString (c);
+    }
+    return w + gothRunWidth (run, f);
+}
+void drawGothText (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, float h, juce::Justification j)
+{
+    const auto f = gothFont (h); g.setFont (f);
+    const float total = gothTextWidth (text, h);
+    float x = area.getX();
+    if (j.testFlags (juce::Justification::horizontallyCentred)) x = area.getCentreX() - total * 0.5f;
+    else if (j.testFlags (juce::Justification::right)) x = area.getRight() - total;
+    const float capH = h * 0.74f, xH = h * 0.42f;   // measured off the rendered UnifrakturMaguntia caps / x-height
+    const float baseline = std::round (area.getCentreY() + capH * 0.5f);
+    juce::String run;
+    auto flush = [&] { if (run.isEmpty()) return; g.drawSingleLineText (run, (int) std::round (x), (int) std::round (baseline)); x += gothRunWidth (run, f); run.clear(); };
+    for (auto c : text)
+    {
+        if (c == 'V' || c == 'v')
+        {
+            flush(); const bool up = c == 'V'; const float w = vWidth (h, up);
+            drawV (g, x + h * 0.02f, baseline, up ? capH : xH, w); x += w + h * 0.04f;
+        }
+        else run << juce::String::charToString (c);
+    }
+    flush();
+}
 void drawCross (juce::Graphics& g, juce::Point<float> c, float s, float th, bool inverted)
 {
     const float arm = inverted ? 0.28f : -0.28f;   // the cross bar sits a little above the centre (below when inverted)
@@ -763,8 +814,7 @@ void Panel::paint (juce::Graphics& g)
     g.setColour (kDim); g.setFont (uiFont (10.5f, true));
     g.drawText ("CMPLXTY", 190, 10, 120, 12, juce::Justification::centredLeft);
     g.setColour (kPri); drawCross (g, { 24.0f, 26.0f }, 22.0f, 1.2f, true);
-    g.setFont (gothFont (38.0f));
-    g.drawText (sp.title, 38, 12, 300, 40, juce::Justification::centredLeft);
+    drawGothText (g, sp.title, { 38.0f, 12.0f, 300.0f, 40.0f }, 38.0f, juce::Justification::centredLeft);
     g.setColour (kSec.withAlpha (0.6f)); g.fillRect (190.0f, 41.0f, 300.0f, 1.0f);
     drawTriangle (g, { 500.0f, 41.5f }, 7.0f, 1.0f, true);
     g.setColour (kDim); g.setFont (uiFont (10.5f, true));
@@ -776,8 +826,7 @@ void Panel::paint (juce::Graphics& g)
         g.setColour (kPanel);          g.fillRoundedRectangle (r.toFloat(), 6.0f);
         g.setColour (kPri.withAlpha (on ? 0.35f : 0.15f)); g.drawRoundedRectangle (r.toFloat(), 6.0f, 1.0f);
         g.setColour (kSec.withAlpha (on ? 0.85f : 0.35f)); drawCross (g, { r.getX() + 11.0f, r.getY() + 13.0f }, 11.0f, 1.0f);
-        g.setColour (on ? kPri.withAlpha (0.92f) : kDim.withAlpha (0.5f)); g.setFont (gothFont (17.0f));
-        g.drawText (s->spec->title, r.getX() + 20, r.getY() + 2, r.getWidth() - 80, 20, juce::Justification::centredLeft);
+        g.setColour (on ? kPri.withAlpha (0.92f) : kDim.withAlpha (0.5f)); drawGothText (g, s->spec->title, juce::Rectangle<int> (r.getX() + 20, r.getY() + 2, r.getWidth() - 80, 20).toFloat(), 17.0f, juce::Justification::centredLeft);
     }
 
     // emblem in the free corner: a thin downward triangle around a cross, flanked by hairlines and the motto
@@ -787,8 +836,7 @@ void Panel::paint (juce::Graphics& g)
         const juce::Point<float> c (em.getX() + 64.0f, em.getCentreY());
         g.setColour (kSec.withAlpha (0.8f)); drawTriangle (g, c.translated (0.0f, -6.0f), 74.0f, 1.0f, true);
         g.setColour (kPri); drawCross (g, c.translated (0.0f, -12.0f), 34.0f, 1.2f);
-        g.setColour (kPri.withAlpha (0.9f)); g.setFont (gothFont (26.0f));
-        g.drawText ("Vvitch", (int) em.getX() + 124, (int) em.getY() + 22, 240, 34, juce::Justification::centredLeft);
+        g.setColour (kPri.withAlpha (0.9f)); drawGothText (g, "VVitch", { em.getX() + 124.0f, em.getY() + 22.0f, 240.0f, 34.0f }, 26.0f, juce::Justification::centredLeft);
         g.setColour (kSec.withAlpha (0.5f)); g.fillRect (em.getX() + 124.0f, em.getY() + 60.0f, 220.0f, 1.0f);
         g.setColour (kDim); g.setFont (uiFont (10.0f, true));
         g.drawText ("GLASS  /  HAUNT  /  DRAG", (int) em.getX() + 124, (int) em.getY() + 66, 240, 14, juce::Justification::centredLeft);

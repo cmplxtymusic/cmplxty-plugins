@@ -16,6 +16,10 @@ juce::Typeface::Ptr uiTypeface (bool bold);
 inline juce::Font uiFont (float h, bool bold = false) { return juce::Font (juce::FontOptions (uiTypeface (bold)).withHeight (h * 1.14f)); }
 juce::Typeface::Ptr gothTypeface();   // UnifrakturMaguntia (OFL): title and section headers only
 inline juce::Font gothFont (float h) { return juce::Font (juce::FontOptions (gothTypeface()).withHeight (h)); }
+// Blackletter text with every V/v replaced by a drawn, sharp V (UnifrakturMaguntia's V reads as B).
+// Use this instead of drawText for anything set in gothFont.
+void drawGothText (juce::Graphics&, const juce::String&, juce::Rectangle<float> area, float height, juce::Justification);
+float gothTextWidth (const juce::String&, float height);
 // thin motifs: a latin cross (optionally inverted) and an outlined triangle (pointing down when `down`)
 void drawCross (juce::Graphics&, juce::Point<float> centre, float size, float thickness, bool inverted = false);
 void drawTriangle (juce::Graphics&, juce::Point<float> centre, float size, float thickness, bool down = false);
