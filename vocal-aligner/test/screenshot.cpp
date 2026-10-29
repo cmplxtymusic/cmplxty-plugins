@@ -1,6 +1,7 @@
 // Renders the real VocalAlignerEditor to a PNG, and runs the processor-level tests.
 // usage: VocalAlignerScreenshot out.png [banner|menu|big|empty|keys|params|proc]
 #include "PluginEditor.h"
+#include "PresetKitTest.h"
 #include <random>
 
 namespace
@@ -171,7 +172,11 @@ int main (int argc, char** argv)
     { va::upd::Settings s; s.enabled = true; s.save();
       auto* o = new juce::DynamicObject(); o->setProperty ("checked", (juce::int64) (juce::Time::currentTimeMillis() / 1000)); o->setProperty ("ok", false);
       va::upd::writeJson (va::upd::dataDir().getChildFile ("update-cache.json"), juce::var (o)); }
-    if (mode == "proc") return procTests();
+    if (mode == "proc") return procTests() + pk::test::procTests<VocalAlignerProcessor> ([] (VocalAlignerProcessor& q) -> pk::PresetManager& { return q.presets; }, va::upd::dataDir().getChildFile ("Presets"), 2, 4.0f, 1.0,
+                                                       [] (const juce::MemoryBlock& mb) -> std::unique_ptr<juce::XmlElement> {   // "VAL1" + int + XML text + takes
+                                                           if (mb.getSize() < 8 || std::memcmp (mb.getData(), "VAL1", 4) != 0) return nullptr;
+                                                           juce::MemoryInputStream in (mb, false); in.skipNextBytes (4); const int n = in.readInt();
+                                                           juce::MemoryBlock xm; in.readIntoMemoryBlock (xm, n); return juce::parseXML (xm.toString()); });
     VocalAlignerProcessor proc;
     proc.setPlayConfigDetails (2, 2, 48000.0, 512); proc.prepareToPlay (48000.0, 512);
     if (mode == "params")
@@ -195,6 +200,7 @@ int main (int argc, char** argv)
         proc.apvts.getParameter ("pitchOn")->setValueNotifyingHost (1.0f);
         proc.startAlign(); proc.testWaitAlign (30000);
     }
+    if (mode.isEmpty() || mode == "presets") proc.presets.loadFactory (1);
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* e = dynamic_cast<VocalAlignerEditor*> (ed.get());
     ed->setVisible (true);
@@ -204,9 +210,11 @@ int main (int argc, char** argv)
     {
         auto r = e->getPanel().auditKeyboard(); std::printf ("%s", r.toRawUTF8());
         auto m = e->getPanel().auditMenus();    std::printf ("%s", m.toRawUTF8());
-        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK")) ? 0 : 1;
+        auto pa = pk::test::auditPresets (e->getPanel(), e->getPanel().getPresetBar(), e->getPanel().getPresetMenu(), proc.presets); std::printf ("%s", pa.toRawUTF8());
+        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK") && pa.contains ("PRESET AUDIT OK")) ? 0 : 1;
     }
     if (mode == "menu") e->getPanel().demoKnobMenu();
+    if (mode == "presets") e->getPanel().getPresetBar().openMenu();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     juce::File f (juce::File::getCurrentWorkingDirectory().getChildFile (out));

@@ -85,6 +85,7 @@ DriftProcessor::DriftProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", createLayout())
 {
+    presets.keepIds = { "eco" };   // a display preference, not part of the sound
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     P = { g ("coarse"), g ("fine"), g ("shiftOn"), g ("spread"), g ("wide"), g ("mix"), g ("feedback"), g ("keyOn"), g ("keyAmt"),
           g ("lowBand"), g ("highBand"), g ("xoLow"), g ("xoHigh"), g ("slope"), g ("soloLow"), g ("soloMid"), g ("soloHigh") };
@@ -154,6 +155,7 @@ void DriftProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::XmlElement xml ("DriftState");
     xml.setAttribute ("version", 1);
+    xml.setAttribute ("presetName", presets.currentName()); xml.setAttribute ("presetUser", presets.currentIsUser());
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
@@ -166,6 +168,7 @@ void DriftProcessor::setStateInformation (const void* data, int size)
     if (auto xml = getXmlFromBinary (data, size))
         if (xml->hasTagName ("DriftState"))
         {
+            presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
             for (auto* prm : getParameters())
                 if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
                     if (xml->hasAttribute (r->paramID))

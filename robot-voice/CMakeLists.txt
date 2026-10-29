@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(RobotVoice VERSION 1.0.0 LANGUAGES C CXX)
+project(RobotVoice VERSION 1.0.1 LANGUAGES C CXX)
+# Linux builds are for the tests only; the box sysroot has no libxi headers
+if(UNIX AND NOT APPLE)
+    add_compile_definitions(JUCE_USE_XINPUT=0)
+endif()
 add_compile_definitions(NOMINMAX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,7 +45,8 @@ set_target_properties(RVAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_sources(RobotVoice PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
-    src/Layout.cpp)
+    src/Layout.cpp
+    src/Presets.cpp)
 
 target_compile_definitions(RobotVoice PUBLIC
     JUCE_WEB_BROWSER=0
@@ -69,7 +74,7 @@ set_target_properties(RobotVoiceUpdateTest PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # Renders the real editor to a PNG (run under Xvfb on Linux):  RobotVoiceScreenshot out.png [banner|menu]
 juce_add_console_app(RobotVoiceScreenshot PRODUCT_NAME "RobotVoiceScreenshot")
-target_sources(RobotVoiceScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp)
+target_sources(RobotVoiceScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp src/Presets.cpp)
 target_include_directories(RobotVoiceScreenshot PRIVATE src)
 target_link_libraries(RobotVoiceScreenshot PRIVATE RVAssets juce::juce_audio_utils juce::juce_recommended_config_flags)
 target_compile_definitions(RobotVoiceScreenshot PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1

@@ -110,6 +110,7 @@ void GlitchCrusherProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::XmlElement xml ("GlitchCrusherState");
     xml.setAttribute ("version", 2);
+    xml.setAttribute ("presetName", presets.currentName()); xml.setAttribute ("presetUser", presets.currentIsUser());
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
@@ -131,6 +132,7 @@ void GlitchCrusherProcessor::setStateInformation (const void* data, int size)
                         if (legacy && r->paramID == "filterType") v = juce::jmax (0.0, v - 1.0);
                         r->setValueNotifyingHost (r->convertTo0to1 ((float) v));
                     }
+            presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
             if (legacy)
             {
                 if (auto* f = apvts.getParameter ("filterOn")) f->setValueNotifyingHost (xml->getIntAttribute ("filterType", 0) != 0 ? 1.0f : 0.0f);

@@ -87,6 +87,9 @@ function shouldAutoCheck(settings, now = Date.now()) {
   return !(last && now - last < DAY_MS && now >= last);
 }
 
+// After any check, failed or not, note the time: an offline or broken check waits 24 hours like a good one instead of retrying every launch.
+function recordCheck(settings, now = Date.now()) { settings.lastUpdateCheck = now; return settings; }
+
 // Download the installer to destDir, check sha256 (and size when the info has one), return the file path.
 function downloadInstaller(info, destDir, onProgress, signal, redirects = 5, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -192,4 +195,4 @@ function macAppPath(exePath) {
   return m ? m[1] : '';
 }
 
-module.exports = { macInstallScript, macAppPath, VERSION_URL, DAY_MS, cmpVersion, parseInfo, checkForUpdate, shouldAutoCheck, downloadInstaller, launchInstaller };
+module.exports = { macInstallScript, macAppPath, VERSION_URL, DAY_MS, cmpVersion, parseInfo, checkForUpdate, shouldAutoCheck, recordCheck, downloadInstaller, launchInstaller };

@@ -1,5 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 #include "ReverbDSP.h"
 
 // CMPLXTY Dark Reverb: a big, dark, metallic reverb (8-line feedback delay network) with a pitch-shifted shimmer loop
@@ -34,6 +36,7 @@ public:
 
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+    pk::PresetManager presets { apvts, &undoManager, "CMPLXTY Dark Reverb", dr::upd::dataDir(), DR_VERSION_STRING };
     std::atomic<int> uiWidth { 0 }, uiHeight { 0 };
 
     // display

@@ -28,6 +28,7 @@ RobotVoiceProcessor::RobotVoiceProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", rv::makeLayout (kParams))
 {
+    presets.keepIds = { "key" };   // the song key is yours; presets change the sound, not the key
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pSnap = g ("snapOn"); pKey = g ("key"); pScale = g ("scale"); pSpeed = g ("speed"); pVoc = g ("vocOn"); pCar = g ("carrier");
     pBands = g ("bands"); pOct = g ("octave"); pVocMix = g ("vocMix"); pRing = g ("ringOn"); pRingHz = g ("ringHz"); pRingMix = g ("ringMix");
@@ -84,6 +85,7 @@ void RobotVoiceProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     if (uiWidth.load() > 0 && uiHeight.load() > 0) { xml->setAttribute ("uiW", uiWidth.load()); xml->setAttribute ("uiH", uiHeight.load()); }
+    xml->setAttribute ("presetName", presets.currentName()); xml->setAttribute ("presetUser", presets.currentIsUser());
     copyXmlToBinary (*xml, dest);
 }
 
@@ -93,6 +95,7 @@ void RobotVoiceProcessor::setStateInformation (const void* data, int size)
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
 }
 
 juce::AudioProcessorEditor* RobotVoiceProcessor::createEditor() { return new RobotVoiceEditor (*this); }

@@ -43,6 +43,7 @@ VocalAlignerProcessor::VocalAlignerProcessor()
                           .withInput  ("Guide (side-chain)", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, &undoManager, "STATE", va::makeLayout (kParams))
 {
+    presets.keepIds = { "monitor" };   // what you listen to is a workflow switch, not part of a preset
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pTight = g ("tight"); pShift = g ("maxShift"); pPitchOn = g ("pitchOn"); pPitchAmt = g ("pitchAmt");
     pMonitor = g ("monitor"); pGain = g ("gain"); pAuto = g ("autoAlign");
@@ -437,6 +438,7 @@ void VocalAlignerProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::XmlElement xml ("VocalAlignerState");
     xml.setAttribute ("version", 1);
+    xml.setAttribute ("presetName", presets.currentName()); xml.setAttribute ("presetUser", presets.currentIsUser());
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
@@ -480,6 +482,7 @@ void VocalAlignerProcessor::setStateInformation (const void* data, int size)
     }
     else xml = getXmlFromBinary (data, size);
     if (xml == nullptr || ! xml->hasTagName ("VocalAlignerState")) return;
+    presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             if (xml->hasAttribute (r->paramID))

@@ -16,6 +16,7 @@ const U = require('../src/updater');
   assert.strictEqual(U.shouldAutoCheck({ lastUpdateCheck: now - 3600e3 }, now), false);
   assert.strictEqual(U.shouldAutoCheck({ lastUpdateCheck: now - 25 * 3600e3 }, now), true);
   assert.strictEqual(U.shouldAutoCheck({ autoUpdateCheck: false, lastUpdateCheck: 0 }, now), false);
+  { const st = { lastUpdateCheck: 0 }; U.recordCheck(st, now); assert.strictEqual(st.lastUpdateCheck, now); assert.strictEqual(U.shouldAutoCheck(st, now + 3600e3), false); assert.strictEqual(U.shouldAutoCheck(st, now + 25 * 3600e3), true); }
 
   const payload = crypto.randomBytes(300000);
   const sha = crypto.createHash('sha256').update(payload).digest('hex');

@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "GrowlDSP.h"
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 
 class GrowlProcessor final : public juce::AudioProcessor
 {
@@ -33,6 +35,7 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    pk::PresetManager presets { apvts, nullptr, "CMPLXTY Growl", gw::upd::dataDir(), GW_VERSION_STRING };
 
     // live vowel position (incl. LFO) for the editor's formant display; written by the audio thread, read by the UI
     std::atomic<float> vowelDisplay { 0.4f };

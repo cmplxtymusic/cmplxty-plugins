@@ -30,6 +30,7 @@ DarkReverbProcessor::DarkReverbProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", dr::makeLayout (kParams))
 {
+    presets.keepIds = { "freeze" };   // a performance switch: changing presets never freezes or un-freezes the tail
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pPre = g ("preDelay"); pSize = g ("size"); pDecay = g ("decay"); pDiff = g ("diffusion"); pDark = g ("dark"); pLow = g ("lowCut");
     pMetal = g ("metal"); pMod = g ("mod"); pShOn = g ("shimOn"); pShP = g ("shimPitch"); pShAmt = g ("shimAmt"); pFreeze = g ("freeze");
@@ -76,6 +77,7 @@ void DarkReverbProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     if (uiWidth.load() > 0 && uiHeight.load() > 0) { xml->setAttribute ("uiW", uiWidth.load()); xml->setAttribute ("uiH", uiHeight.load()); }
+    xml->setAttribute ("presetName", presets.currentName()); xml->setAttribute ("presetUser", presets.currentIsUser());
     copyXmlToBinary (*xml, dest);
 }
 
@@ -85,6 +87,7 @@ void DarkReverbProcessor::setStateInformation (const void* data, int size)
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
 }
 
 juce::AudioProcessorEditor* DarkReverbProcessor::createEditor() { return new DarkReverbEditor (*this); }

@@ -386,15 +386,24 @@ Panel::Panel (DarkReverbProcessor& p, juce::AudioProcessorEditor& o) : proc (p),
     {
         const auto page = dr::upd::pageForUrl (bannerInfo.url);
         if (dr::upd::isTrustedUrl (page)) juce::URL (page).launchInDefaultBrowser();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
-    banner.onLater = [this] { banner.setVisible (false); footerNote = {}; repaint(); };
+    banner.onLater = [this] { banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint(); };
     banner.onSkip = [this]
     {
         auto s = dr::upd::Settings::load(); s.skipVersion = bannerInfo.version; s.save();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
     addChildComponent (popup);
+    // preset bar (top, left of undo / redo; the update banner takes its place while shown).  Mouse only: it never takes keyboard focus.
+    addAndMakeVisible (presetBar); addChildComponent (presetMenu);
+    presetBar.setLookAndFeel (&look);
+    presetBar.font = presetMenu.font = [] (float h) { return uiFont (h); };
+    presetBar.bg = kPanel; presetBar.line = kSec.withAlpha (0.35f); presetBar.dim = kDim;
+    presetMenu.bg = juce::Colour (0xff202020); presetMenu.line = kPri.withAlpha (0.7f); presetMenu.hi = kSec.darker (0.5f); presetMenu.tick = kPri; presetMenu.dim = kDim;
+    presetBar.showMenu = [this] (std::vector<pk::MenuItem> items, juce::Rectangle<int> a) { popup.dismiss(); presetMenu.show (a + presetBar.getPosition(), std::move (items)); };
+    presetBar.afterDialog = [this] { hostkeys::releaseLater (*this); };
+    presetMenu.onDismiss = [this] { hostkeys::release (*this); };
 
     updatesOn = dr::upd::Settings::load().enabled;
     setWantsKeyboardFocus (false);            // never hold keyboard focus: Space & co. must keep driving the host transport
@@ -418,6 +427,7 @@ Panel::~Panel()
     for (auto& s : sections) { s->power.setLookAndFeel (nullptr); s->label.setLookAndFeel (nullptr); }
     undoBtn.setLookAndFeel (nullptr); redoBtn.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
+    presetBar.setLookAndFeel (nullptr);
 }
 
 // Only acts when the plug-in window really holds the native keyboard focus and nothing needs it (no popup, no value being typed, no combo menu):
@@ -446,7 +456,7 @@ void Panel::startUpdateCheck (bool force)
 void Panel::showBanner (const dr::upd::Info& i)
 {
     bannerInfo = i;
-    banner.show (i);
+    banner.show (i); presetBar.setVisible (false); presetMenu.dismiss();
     footerNote = i.notes.isNotEmpty() ? "What's new: " + i.notes : juce::String();
     resized(); repaint();
 }
@@ -679,6 +689,8 @@ void Panel::resized()
     }
     undoBtn.setBounds (W - 128, 12, 56, 24); redoBtn.setBounds (W - 68, 12, 56, 24);
     banner.setBounds (W - 136 - 392, 9, 392, 28);
+    presetBar.setBounds (W - 136 - 360, 10, 352, 26);
+    presetMenu.setBounds (getLocalBounds());
     popup.setBounds (getLocalBounds());
 }
 

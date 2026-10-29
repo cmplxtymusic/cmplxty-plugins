@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "DriftDSP.h"
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 
 class DriftProcessor final : public juce::AudioProcessor
 {
@@ -36,6 +38,7 @@ public:
     juce::UndoManager undoManager;               // behind the editor's UNDO / REDO buttons (declared before apvts)
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    pk::PresetManager presets { apvts, &undoManager, "CMPLXTY Drift", df::upd::dataDir(), DF_VERSION_STRING };
 
     // the engine's lock-free sample taps feed the editor's spectrum display
     df::Engine& getEngine() noexcept { return engine; }

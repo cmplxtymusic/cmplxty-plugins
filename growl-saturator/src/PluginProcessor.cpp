@@ -148,6 +148,7 @@ void GrowlProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::XmlElement xml ("GrowlState");
     xml.setAttribute ("version", 1);
+    xml.setAttribute ("presetName", presets.currentName()); xml.setAttribute ("presetUser", presets.currentIsUser());
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
@@ -158,10 +159,13 @@ void GrowlProcessor::setStateInformation (const void* data, int size)
 {
     if (auto xml = getXmlFromBinary (data, size))
         if (xml->hasTagName ("GrowlState"))
+        {
+            presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
             for (auto* prm : getParameters())
                 if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
                     if (xml->hasAttribute (r->paramID))
                         r->setValueNotifyingHost (r->convertTo0to1 ((float) xml->getDoubleAttribute (r->paramID)));
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new GrowlProcessor(); }
