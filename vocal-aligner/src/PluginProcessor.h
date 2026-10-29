@@ -2,6 +2,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "AlignDSP.h"
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 
 // CMPLXTY Vocal Aligner.  Put it on the dub (double / harmony) track.
 //  - CAPTURE: while the host plays, the dub on the main input and the guide on the side-chain input are recorded against the song position
@@ -40,6 +42,7 @@ public:
 
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+    pk::PresetManager presets { apvts, &undoManager, "CMPLXTY Vocal Aligner", va::upd::dataDir(), VA_VERSION_STRING };
     std::atomic<int> uiWidth { 0 }, uiHeight { 0 };
 
     // ---- takes (message thread API) --------------------------------------------------------------------------------------------

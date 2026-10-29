@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(VocalAligner VERSION 1.0.0 LANGUAGES C CXX)
+project(VocalAligner VERSION 1.0.1 LANGUAGES C CXX)
+# Linux builds are for the tests only; the box sysroot has no libxi headers
+if(UNIX AND NOT APPLE)
+    add_compile_definitions(JUCE_USE_XINPUT=0)
+endif()
 add_compile_definitions(NOMINMAX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,7 +45,8 @@ set_target_properties(VAAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_sources(VocalAligner PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
-    src/Layout.cpp)
+    src/Layout.cpp
+    src/Presets.cpp)
 
 target_compile_definitions(VocalAligner PUBLIC
     JUCE_WEB_BROWSER=0
@@ -69,7 +74,7 @@ set_target_properties(VocalAlignerUpdateTest PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # Renders the real editor to a PNG (run under Xvfb on Linux):  VocalAlignerScreenshot out.png [banner|menu]
 juce_add_console_app(VocalAlignerScreenshot PRODUCT_NAME "VocalAlignerScreenshot")
-target_sources(VocalAlignerScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp)
+target_sources(VocalAlignerScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp src/Presets.cpp)
 target_include_directories(VocalAlignerScreenshot PRIVATE src)
 target_link_libraries(VocalAlignerScreenshot PRIVATE VAAssets juce::juce_audio_utils juce::juce_recommended_config_flags)
 target_compile_definitions(VocalAlignerScreenshot PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
