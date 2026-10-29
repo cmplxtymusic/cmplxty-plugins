@@ -1,6 +1,13 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "UpdateCheck.h"
+#include "HostKeys.h"
+
+// 1.0.1: when 1, a 10 Hz check hands the native keyboard focus back to the host if the plug-in ever ends up holding it (e.g. after a combo box popup).
+// The real fix is that nothing in the editor wants keyboard focus; set to 0 to test that on its own.
+#ifndef GC_FOCUS_NET
+ #define GC_FOCUS_NET 1
+#endif
 
 namespace gcui
 {
@@ -9,9 +16,9 @@ juce::Typeface::Ptr uiTypeface (bool bold);
 inline juce::Font uiFont (float h, bool bold = false) { return juce::Font (juce::FontOptions (uiTypeface (bold)).withHeight (h * 1.14f)); }
 
 // Slider that asks its owner for a context menu on right-click (Reset / Type in value / Copy / Paste / Init) and resets on double-click.
-struct Knob : juce::Slider
+struct Knob : juce::Slider, private juce::Label::Listener
 {
-    Knob() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow) { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    Knob() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow) { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); noFocus(); }
     std::function<void (Knob&, juce::Point<int> screenPos)> onContextMenu;
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -20,6 +27,25 @@ struct Knob : juce::Slider
     }
     void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseUp (e); }
     void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseDrag (e); }
+
+    // The value text box is a juce::Label. Slider switches "wants keyboard focus" back ON for it (it is click-to-type) every time the look-and-feel
+    // or the enabled state changes, and a click anywhere near it then moved the native keyboard focus into the plug-in window (Space stopped
+    // reaching the DAW). So after each of those changes: no focus for it, and watch it so the focus goes back to the host when typing ends.
+    void lookAndFeelChanged() override { juce::Slider::lookAndFeelChanged(); noFocus(); }
+    void enablementChanged() override  { juce::Slider::enablementChanged(); noFocus(); }
+
+private:
+    void noFocus()
+    {
+        for (auto* c : getChildren())
+        {
+            c->setWantsKeyboardFocus (false);
+            c->setMouseClickGrabsKeyboardFocus (false);
+            if (auto* l = dynamic_cast<juce::Label*> (c)) { l->removeListener (this); l->addListener (this); }
+        }
+    }
+    void labelTextChanged (juce::Label*) override {}
+    void editorHidden (juce::Label*, juce::TextEditor&) override { hostkeys::releaseLater (*this); }   // typed value done: Space goes to the host again
 };
 
 // Toggle button for the plug-in UI: never takes keyboard focus (so Space and the other transport keys always reach the host),
@@ -77,7 +103,7 @@ public:
 };
 } // namespace gcui
 
-class GlitchCrusherEditor final : public juce::AudioProcessorEditor
+class GlitchCrusherEditor final : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit GlitchCrusherEditor (GlitchCrusherProcessor&);
@@ -93,6 +119,7 @@ public:
     juce::String auditMenus();      // right-click path with a fake host context menu / without one
 
 private:
+    void timerCallback() override;
     struct KnobBox
     {
         gcui::Knob slider;

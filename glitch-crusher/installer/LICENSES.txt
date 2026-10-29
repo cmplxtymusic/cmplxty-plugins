@@ -6,8 +6,7 @@ General Public License, version 3, as published by the Free Software Foundation.
 WARRANTY. See https://www.gnu.org/licenses/gpl-3.0.html
 
 The complete corresponding source code, the build scripts, the JUCE patch and this installer's script are
-published with the download: CMPLXTY-Glitch-Crusher-source-1.0.0.zip (same folder as the installer) and in the
-GitHub repository https://github.com/cmplxtymusic/cmplxty-plugins (folder glitch-crusher).
+published in the GitHub repository https://github.com/cmplxtymusic/cmplxty-plugins (folder glitch-crusher).
 
 Built with the JUCE framework 9.0.4 (https://juce.com), used under the GNU General Public License v3, with a
 small patch (static comctl32/TaskDialog import removed so the plug-in also loads in older hosts such as FL

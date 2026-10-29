@@ -65,11 +65,17 @@ void PopupOverlay::show (juce::Point<int> where, std::vector<Item> newItems)
                        juce::jlimit (4, juce::jmax (4, getHeight() - panel.getHeight() - 4), panel.getY()));
     hover = -1; open = true;
     setVisible (true); toFront (false);
+    hostkeys::remember (*this);                          // which host window has the keyboard right now
     setWantsKeyboardFocus (true); grabKeyboardFocus();   // only while the menu is open, so its shortcut letters work
     repaint();
 }
 
-void PopupOverlay::dismiss() { open = false; setWantsKeyboardFocus (false); giveAwayKeyboardFocus(); setVisible (false); }
+void PopupOverlay::dismiss()
+{
+    const bool wasOpen = open;
+    open = false; setWantsKeyboardFocus (false); giveAwayKeyboardFocus(); setVisible (false);
+    if (wasOpen) hostkeys::release (*this);   // native focus back to the host window (Space = play / pause keeps working)
+}
 
 juce::Rectangle<int> PopupOverlay::rowBounds (int i) const
 {
@@ -303,13 +309,9 @@ GlitchCrusherEditor::GlitchCrusherEditor (GlitchCrusherProcessor& p) : AudioProc
     setMouseClickGrabsKeyboardFocus (false);
     for (auto* b : { &banner.update, &banner.later, &banner.skip }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
     // belt and braces: no child (incl. the sliders' value labels) may keep keyboard focus - only the popup while open, and text editors
-    std::function<void (juce::Component&)> noFocus = [&] (juce::Component& comp)
-    {
-        if (&comp != &popup) { comp.setWantsKeyboardFocus (false); comp.setMouseClickGrabsKeyboardFocus (false); }
-        for (auto* ch : comp.getChildren()) noFocus (*ch);
-    };
-    noFocus (*this);
+    gcui::hostkeys::noKeyboardFocus (*this, &popup);
     popup.setWantsKeyboardFocus (false);
+    startTimerHz (10);                        // remembers the host's focused window; safety net, see timerCallback
     setSize (720, 384);
     // update check: after the editor is up, on a background thread, at most once per 24 h, silent on failure
     juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<GlitchCrusherEditor> (this)] { if (sp != nullptr) sp->startUpdateCheck(); });
@@ -317,12 +319,23 @@ GlitchCrusherEditor::GlitchCrusherEditor (GlitchCrusherProcessor& p) : AudioProc
 
 GlitchCrusherEditor::~GlitchCrusherEditor()
 {
+    stopTimer();
     checker.cancelAndWait();
     for (auto* k : { &bits, &down, &drive, &prob, &cutoff, &res, &mix, &outGain })
     { k->slider.setLookAndFeel (nullptr); k->label.setLookAndFeel (nullptr); }
     for (auto* c : { &rate, &rev, &ftype }) { c->box.setLookAndFeel (nullptr); c->label.setLookAndFeel (nullptr); }
     for (auto* s : { &crushSec, &glitchSec, &filterSec }) s->power.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
+}
+
+// Only acts when the plug-in window really holds the native keyboard focus and nothing needs it (no popup, no value being typed, no combo menu):
+// then the focus goes back to the host. Normally it never fires, because nothing in the editor asks for focus.
+void GlitchCrusherEditor::timerCallback()
+{
+    gcui::hostkeys::remember (*this);
+   #if GC_FOCUS_NET
+    if (! popup.isOpen()) gcui::hostkeys::release (*this);
+   #endif
 }
 
 //==============================================================================
@@ -452,6 +465,16 @@ juce::String GlitchCrusherEditor::auditKeyboard()
         { ++bad; out << "  wants focus: " << c.getName() << " (" << typeid (c).name() << ")\n"; }
         for (auto* ch : c.getChildren()) walk (*ch);
     };
+    // Slider turns focus back on for its value box on look-and-feel / enablement changes: provoke both and make sure the knobs fix it up again
+    for (auto* ks : { &bits, &down, &drive, &prob, &cutoff, &res, &mix, &outGain }) { ks->slider.setEnabled (false); ks->slider.setEnabled (true); ks->slider.sendLookAndFeelChange(); }
+    // negative control: a stock juce::Slider really does ask for keyboard focus (so the walk below could fail)
+    {
+        juce::Slider stock (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
+        stock.setBounds (0, 0, 80, 80); int stockWants = 0;
+        for (auto* c : stock.getChildren()) stockWants += c->getWantsKeyboardFocus() ? 1 : 0;
+        out << "  negative control: stock slider's value box wants focus=" << stockWants << " (expected 1)\n";
+        if (stockWants != 1) ++bad;
+    }
     walk (*this);
     out << "  " << n << " components, " << bad << " ask for keyboard focus (expected 0)\n";
     const bool closedWants = popup.getWantsKeyboardFocus();

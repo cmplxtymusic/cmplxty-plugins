@@ -1,5 +1,5 @@
 ; CMPLXTY Glitch Crusher installer (NSIS 3, free). Derived from the Quartz installer template. Build with scripts/build-installer.sh, or:
-;   makensis -DVERSION=1.0.0 -DSTAGE=<dir with "CMPLXTY Glitch Crusher.vst3" + ".clap"> -DOUTFILE=<out.exe> glitch-crusher.nsi
+;   makensis -DVERSION=1.0.1 -DSTAGE=<dir with "CMPLXTY Glitch Crusher.vst3" + ".clap"> -DOUTFILE=<out.exe> glitch-crusher.nsi
 ; - All users (admin, UAC prompt):  Common Files\VST3 and Common Files\CLAP + HKLM uninstall entry
 ; - Current user (UAC declined / no admin / /CURRENTUSER):  %LOCALAPPDATA%\Programs\Common\{VST3,CLAP} + HKCU entry
 ; - Upgrade: stable app id + registry key; installs over the previous version in the same scope (no uninstall first),
@@ -8,7 +8,7 @@
 ; - Uses no comctl32/TaskDialog APIs.
 Unicode true
 !ifndef VERSION
-  !define VERSION "1.0.0"
+  !define VERSION "1.0.1"
 !endif
 !ifndef STAGE
   !define STAGE "..\dist\stage-windows-x64"
