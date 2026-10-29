@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET Vvitch
     CLAP_ID "com.cmplxty.vvitch"
     CLAP_FEATURES instrument synthesizer stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(Vvitch_CLAP "CMPLXTY VVITCH" "CMPLXTY")
+
 # bundled UI fonts (Barlow and UnifrakturMaguntia, SIL OFL 1.1 - see assets/fonts/OFL*.txt)
 juce_add_binary_data(VVAssets SOURCES assets/fonts/UnifrakturMaguntia-Book.ttf assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(VVAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
