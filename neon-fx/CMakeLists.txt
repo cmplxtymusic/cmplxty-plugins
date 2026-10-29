@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET NeonFX
     CLAP_ID "com.cmplxty.neon-fx"
     CLAP_FEATURES audio-effect distortion filter glitch stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(NeonFX_CLAP "CMPLXTY Neon FX" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(CWAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(CWAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

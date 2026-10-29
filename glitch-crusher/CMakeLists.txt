@@ -37,6 +37,9 @@ clap_juce_extensions_plugin(TARGET GlitchCrusher
     CLAP_ID "com.cmplxty.glitch-crusher"
     CLAP_FEATURES audio-effect distortion filter)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(GlitchCrusher_CLAP "CMPLXTY Glitch Crusher" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(GCAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(GCAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

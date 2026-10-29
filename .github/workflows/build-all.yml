@@ -1,0 +1,33 @@
+# Build every plugin's installers (Windows exe via clang-cl/xwin + NSIS, macOS pkg) on GitHub-hosted runners in one run.
+# SignPath requirement: release assets must come from GitHub-hosted CI, never from a dev machine.
+# The visualizer workflow lives on its own branch and is added here once that branch is merged.
+name: build-all
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cyber-wavetable:
+    uses: ./.github/workflows/cyber-wavetable.yml
+  dark-reverb:
+    uses: ./.github/workflows/dark-reverb.yml
+  drift-shifter:
+    uses: ./.github/workflows/drift-shifter.yml
+  drum-player:
+    uses: ./.github/workflows/drum-player.yml
+  glitch-crusher:
+    uses: ./.github/workflows/glitch-crusher.yml
+  granular:
+    uses: ./.github/workflows/granular.yml
+  growl-saturator:
+    uses: ./.github/workflows/growl-saturator.yml
+  mix-tools:
+    uses: ./.github/workflows/mix-tools.yml
+  neon-fx:
+    uses: ./.github/workflows/neon-fx.yml
+  robot-voice:
+    uses: ./.github/workflows/robot-voice.yml
+  sidechain-shaper:
+    uses: ./.github/workflows/sidechain-shaper.yml
+  vocal-aligner:
+    uses: ./.github/workflows/vocal-aligner.yml

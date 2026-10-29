@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET Granular
     CLAP_ID "com.cmplxty.granular"
     CLAP_FEATURES audio-effect granular glitch mono stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(Granular_CLAP "CMPLXTY Granular" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(GRAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(GRAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

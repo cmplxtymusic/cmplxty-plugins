@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET CyberWavetable
     CLAP_ID "com.cmplxty.cyber-wavetable"
     CLAP_FEATURES instrument synthesizer stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(CyberWavetable_CLAP "CMPLXTY Cyber Wavetable" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(CWAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(CWAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -1,0 +1,18 @@
+# Windows VERSIONINFO for the CLAP module (JUCE already embeds one in the VST3 DLL; clap-juce-extensions does not).
+# SignPath requires identical ProductName / ProductVersion on every signed file, checked by tools/check-win-metadata.py.
+function(cmplxty_win_version_info TARGET_NAME PRODUCT COMPANY)
+    if(NOT WIN32 OR NOT TARGET ${TARGET_NAME})
+        return()
+    endif()
+    string(REPLACE "." "," VI_VERSION_COMMAS "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}.0")
+    set(VI_VERSION "${PROJECT_VERSION}")
+    set(VI_PRODUCT "${PRODUCT}")
+    set(VI_COMPANY "${COMPANY}")
+    get_target_property(VI_ORIGINAL ${TARGET_NAME} OUTPUT_NAME)
+    if(NOT VI_ORIGINAL)
+        set(VI_ORIGINAL "${PRODUCT}")
+    endif()
+    set(rc "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_version.rc")
+    configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/win-version-info.rc.in" "${rc}" @ONLY)
+    target_sources(${TARGET_NAME} PRIVATE "${rc}")
+endfunction()

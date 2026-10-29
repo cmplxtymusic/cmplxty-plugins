@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET RobotVoice
     CLAP_ID "com.cmplxty.robot-voice"
     CLAP_FEATURES audio-effect pitch-correction distortion mono stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(RobotVoice_CLAP "CMPLXTY Robot Voice" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(RVAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(RVAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
