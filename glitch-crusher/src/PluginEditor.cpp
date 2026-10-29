@@ -3,7 +3,7 @@
 
 namespace
 {
-const juce::Colour kBg (0xff0b0d17), kPanel (0xff141829), kCyan (0xff00e5ff), kMagenta (0xffff2bd6), kDim (0xff8a93b8);
+const juce::Colour kBg (0xff0d0d0d), kPanel (0xff181818), kCyan (0xffffffff), kMagenta (0xffb8b8b8), kDim (0xff949494);
 constexpr int kFooterH = 22;
 
 using gcui::uiFont;
@@ -98,7 +98,7 @@ void PopupOverlay::paint (juce::Graphics& g)
 {
     if (! open) return;
     g.setColour (juce::Colours::black.withAlpha (0.35f)); g.fillRoundedRectangle (panel.translated (2, 3).toFloat(), 6.0f);
-    g.setColour (juce::Colour (0xff1a2038)); g.fillRoundedRectangle (panel.toFloat(), 6.0f);
+    g.setColour (juce::Colour (0xff202020)); g.fillRoundedRectangle (panel.toFloat(), 6.0f);
     g.setColour (kCyan.withAlpha (0.7f)); g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 6.0f, 1.0f);
     const auto f = uiFont (13.0f);
     for (int i = 0; i < (int) items.size(); ++i)
@@ -169,7 +169,7 @@ void UpdateBanner::show (const gc::upd::Info& i)
 void UpdateBanner::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    g.setColour (juce::Colour (0xff1a2038)); g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (juce::Colour (0xff202020)); g.fillRoundedRectangle (r, 6.0f);
     g.setColour (kMagenta.withAlpha (0.85f)); g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
     g.setColour (kMagenta); g.fillEllipse (10.0f, r.getCentreY() - 3.0f, 6.0f, 6.0f);
     g.setColour (juce::Colours::white); g.setFont (uiFont (12.0f, true));
@@ -189,7 +189,7 @@ GlitchCrusherEditor::Look::Look()
 {
     setDefaultSansSerifTypeface (gcui::uiTypeface (false));
     setColour (juce::Slider::rotarySliderFillColourId, kCyan);
-    setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (0xff262c47));
+    setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (0xff2d2d2d));
     setColour (juce::Slider::thumbColourId, kMagenta);
     setColour (juce::Slider::textBoxTextColourId, juce::Colours::white);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
@@ -201,7 +201,7 @@ GlitchCrusherEditor::Look::Look()
     setColour (juce::PopupMenu::backgroundColourId, kPanel);
     setColour (juce::PopupMenu::textColourId, juce::Colours::white);
     setColour (juce::PopupMenu::highlightedBackgroundColourId, kMagenta.darker (0.4f));
-    setColour (juce::TextButton::buttonColourId, juce::Colour (0xff262c47));
+    setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2d2d2d));
     setColour (juce::TextButton::textColourOffId, juce::Colours::white);
 }
 
@@ -209,7 +209,7 @@ void GlitchCrusherEditor::Look::drawToggleButton (juce::Graphics& g, juce::Toggl
 {
     auto r = b.getLocalBounds().toFloat().reduced (1.0f);
     const bool on = b.getToggleState();
-    g.setColour (on ? kCyan.withAlpha (0.20f) : juce::Colour (0xff262c47)); g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
+    g.setColour (on ? kCyan.withAlpha (0.20f) : juce::Colour (0xff2d2d2d)); g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
     g.setColour (on ? kCyan : kDim.withAlpha (highlighted ? 0.9f : 0.6f)); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f);
     const float d = r.getHeight() - 6.0f;
     const float cx = on ? r.getRight() - 3.0f - d : r.getX() + 3.0f;
