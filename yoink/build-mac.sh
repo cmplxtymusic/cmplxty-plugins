@@ -28,6 +28,20 @@ stage() { node build/stage-ort-mac.js; }
 dmg() {
   [ -x build/tools-mac/yt-dlp ] && [ -x build/tools-mac/ffmpeg ] || { echo "run: bash build-mac.sh tools" >&2; exit 1; }
   [ -d build/ort-mac/arm64 ] || { echo "run: bash build-mac.sh stage" >&2; exit 1; }
+  # GitHub Actions turns a missing secret into an empty string. electron-builder treats
+  # CSC_LINK="" as a certificate path and then fails with "<workdir> not a file".
+  # Drop the empty values so the build stays ad-hoc signed (identity "-").
+  local v
+  for v in CSC_LINK CSC_KEY_PASSWORD CSC_NAME WIN_CSC_LINK WIN_CSC_KEY_PASSWORD \
+           APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID \
+           APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+    if [ -z "${!v:-}" ]; then
+      unset "$v"
+    fi
+  done
+  if [ -z "${CSC_LINK:-}${CSC_NAME:-}" ]; then
+    export CSC_IDENTITY_AUTO_DISCOVERY=false
+  fi
   rm -rf dist-mac
   npx electron-builder --mac --universal --config build/mac-config.js --publish never
   (cd dist-mac && shasum -a 256 Yoink.dmg | tee Yoink.dmg.sha256)

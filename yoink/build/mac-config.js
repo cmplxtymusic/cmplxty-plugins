@@ -11,7 +11,13 @@
 // Real signing and notarization have never been run for Yoink: they need Apple's $99/year Developer Program.
 const base = require('../package.json').build;
 const env = process.env;
+// An empty string is what GitHub Actions exports for a secret that was never set.
+// electron-builder treats that as "a certificate was provided" and tries to read the working directory.
+for (const k of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']) {
+  if (env[k] != null && String(env[k]).trim() === '') delete env[k];
+}
 const realSigning = !!(env.CSC_LINK || env.CSC_NAME);
+if (!realSigning) env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
 const notarize = realSigning && !!((env.APPLE_ID && env.APPLE_APP_SPECIFIC_PASSWORD && env.APPLE_TEAM_ID) || (env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER));
 const { win, nsis, electronDist, ...rest } = base;
 
