@@ -1,6 +1,8 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "PresetKit.h"
 #include "UpdateCheck.h"
+#include "HostKeys.h"
 
 namespace gwui
 {
@@ -9,9 +11,9 @@ juce::Typeface::Ptr uiTypeface (bool bold);
 inline juce::Font uiFont (float h, bool bold = false) { return juce::Font (juce::FontOptions (uiTypeface (bold)).withHeight (h * 1.14f)); }
 
 // Slider that asks its owner for a context menu on right-click (Reset / Type in value / Copy / Paste / Init) and resets on double-click.
-struct Knob : juce::Slider
+struct Knob : juce::Slider, private juce::Label::Listener
 {
-    Knob() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow) { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    Knob() : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow) { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); noFocus(); }
     std::function<void (Knob&, juce::Point<int> screenPos)> onContextMenu;
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -20,6 +22,25 @@ struct Knob : juce::Slider
     }
     void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseUp (e); }
     void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseDrag (e); }
+
+    // The value text box is a juce::Label. Slider switches "wants keyboard focus" back ON for it (it is click-to-type) every time the look-and-feel
+    // or the enabled state changes, and a click anywhere near it then moved the native keyboard focus into the plug-in window (Space stopped
+    // reaching the DAW). So after each of those changes: no focus for it, and watch it so the focus goes back to the host when typing ends.
+    void lookAndFeelChanged() override { juce::Slider::lookAndFeelChanged(); noFocus(); }
+    void enablementChanged() override  { juce::Slider::enablementChanged(); noFocus(); }
+
+private:
+    void noFocus()
+    {
+        for (auto* c : getChildren())
+        {
+            c->setWantsKeyboardFocus (false);
+            c->setMouseClickGrabsKeyboardFocus (false);
+            if (auto* l = dynamic_cast<juce::Label*> (c)) { l->removeListener (this); l->addListener (this); }
+        }
+    }
+    void labelTextChanged (juce::Label*) override {}
+    void editorHidden (juce::Label*, juce::TextEditor&) override { hostkeys::releaseLater (*this); }   // typed value done: Space goes to the host again
 };
 
 // Toggle button for the plug-in UI: never takes keyboard focus (so Space and the other transport keys always reach the host),
@@ -169,6 +190,12 @@ private:
     gwui::VowelView vowelView { proc };
     juce::Rectangle<int> inArea, driveArea, formArea, lfoArea, postArea, outArea, footerArea;
     gwui::PopupOverlay popup;
+    pk::PresetBar presetBar { proc.presets };
+    pk::PresetMenu presetMenu;
+public:
+    pk::PresetBar& getPresetBar() { return presetBar; }
+    pk::PresetMenu& getPresetMenu() { return presetMenu; }
+private:
     gwui::UpdateBanner banner;
     gw::upd::Checker checker;
     gw::upd::Info bannerInfo;

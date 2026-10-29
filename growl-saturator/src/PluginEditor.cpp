@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "BinaryData.h"
+#include "HostKeys.h"
 
 namespace
 {
@@ -65,11 +66,17 @@ void PopupOverlay::show (juce::Point<int> where, std::vector<Item> newItems)
                        juce::jlimit (4, juce::jmax (4, getHeight() - panel.getHeight() - 4), panel.getY()));
     hover = -1; open = true;
     setVisible (true); toFront (false);
+    hostkeys::remember (*this);                          // which host window has the keyboard right now
     setWantsKeyboardFocus (true); grabKeyboardFocus();   // only while the menu is open, so its shortcut letters work
     repaint();
 }
 
-void PopupOverlay::dismiss() { open = false; setWantsKeyboardFocus (false); giveAwayKeyboardFocus(); setVisible (false); }
+void PopupOverlay::dismiss()
+{
+    const bool wasOpen = open;
+    open = false; setWantsKeyboardFocus (false); giveAwayKeyboardFocus(); setVisible (false);
+    if (wasOpen) hostkeys::release (*this);   // native focus back to the host window (Space = play / pause keeps working)
+}
 
 juce::Rectangle<int> PopupOverlay::rowBounds (int i) const
 {
@@ -258,6 +265,7 @@ float VowelView::raw (const char* id) const { return proc.apvts.getRawParameterV
 
 void VowelView::timerCallback()
 {
+    hostkeys::remember (*this);   // keep track of which host window has the keyboard, so a closed value box / menu can hand it back
     const float now[6] = { proc.vowelDisplay.load(), raw ("shift"), raw ("focus"), raw ("crossover"), raw ("formantAmount"), raw ("formantOn") };
     bool ch = false;
     for (int i = 0; i < 6; ++i) if (std::fabs (now[i] - cached[i]) > 1.0e-4f) { cached[i] = now[i]; ch = true; }
@@ -419,15 +427,24 @@ GrowlEditor::GrowlEditor (GrowlProcessor& p) : AudioProcessorEditor (&p), proc (
     {
         const auto page = gw::upd::pageForUrl (bannerInfo.url);
         if (gw::upd::isTrustedUrl (page)) juce::URL (page).launchInDefaultBrowser();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
-    banner.onLater = [this] { banner.setVisible (false); footerNote = {}; repaint(); };
+    banner.onLater = [this] { banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint(); };
     banner.onSkip = [this]
     {
         auto s = gw::upd::Settings::load(); s.skipVersion = bannerInfo.version; s.save();
-        banner.setVisible (false); footerNote = {}; repaint();
+        banner.setVisible (false); presetBar.setVisible (true); footerNote = {}; repaint();
     };
     addChildComponent (popup);
+    // preset bar (top right; the update banner takes its place while shown).  Mouse only: no part of it ever takes keyboard focus.
+    addAndMakeVisible (presetBar); addChildComponent (presetMenu);
+    presetBar.setLookAndFeel (&look);
+    presetBar.font = presetMenu.font = [] (float h) { return uiFont (h); };
+    presetBar.bg = kPanel; presetBar.line = kSec.withAlpha (0.35f); presetBar.dim = kDim;
+    presetMenu.bg = juce::Colour (0xff202020); presetMenu.line = kSec.withAlpha (0.7f); presetMenu.hi = kTrack; presetMenu.tick = kPri; presetMenu.dim = kDim;
+    presetBar.showMenu = [this] (std::vector<pk::MenuItem> items, juce::Rectangle<int> a) { popup.dismiss(); presetMenu.show (a + presetBar.getPosition(), std::move (items)); };
+    presetBar.afterDialog = [this] { gwui::hostkeys::releaseLater (*this); };
+    presetMenu.onDismiss = [this] { gwui::hostkeys::release (*this); };
 
     updatesOn = gw::upd::Settings::load().enabled;
     setWantsKeyboardFocus (false);            // never hold keyboard focus: Space & co. must keep driving the host transport
@@ -454,6 +471,7 @@ GrowlEditor::~GrowlEditor()
     for (auto* t : { &subMono, &limiter }) { t->button.setLookAndFeel (nullptr); t->label.setLookAndFeel (nullptr); }
     for (auto* s : { &driveSec, &formSec, &postSec }) s->power.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
+    presetBar.setLookAndFeel (nullptr);
 }
 
 //==============================================================================
@@ -470,7 +488,7 @@ void GrowlEditor::startUpdateCheck (bool force)
 void GrowlEditor::showBanner (const gw::upd::Info& i)
 {
     bannerInfo = i;
-    banner.show (i);
+    banner.show (i); presetBar.setVisible (false); presetMenu.dismiss();
     footerNote = i.notes.isNotEmpty() ? "What's new: " + i.notes : juce::String();
     resized(); repaint();
 }
@@ -710,6 +728,8 @@ void GrowlEditor::resized()
         sec->power.setBounds (a.getRight() - 50, a.getY() + 4, 42, 16);
 
     banner.setBounds (getWidth() - 12 - 392, 9, 392, 28);
+    presetBar.setBounds (getWidth() - 12 - 330, 10, 330, 26);
+    presetMenu.setBounds (getLocalBounds());
     popup.setBounds (getLocalBounds());
 }
 

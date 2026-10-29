@@ -1,5 +1,6 @@
 // Renders the real GrowlEditor to a PNG.  usage: GrowlScreenshot out.png [banner|menu|off]
 #include "PluginEditor.h"
+#include "PresetKitTest.h"
 
 int main (int argc, char** argv)
 {
@@ -11,12 +12,14 @@ int main (int argc, char** argv)
     { gw::upd::Settings s; s.enabled = true; s.save();
       auto* o = new juce::DynamicObject(); o->setProperty ("checked", (juce::int64) (juce::Time::currentTimeMillis() / 1000)); o->setProperty ("ok", false);
       gw::upd::writeJson (gw::upd::dataDir().getChildFile ("update-cache.json"), juce::var (o)); }
+    if (mode == "proc") return pk::test::procTests<GrowlProcessor> ([] (GrowlProcessor& q) -> pk::PresetManager& { return q.presets; }, gw::upd::dataDir().getChildFile ("Presets"));
     GrowlProcessor proc;
     // a lively, non-default looking state
     auto set = [&] (const char* id, float v) { if (auto* p = proc.apvts.getParameter (id)) p->setValueNotifyingHost (p->convertTo0to1 (v)); };
     set ("drive", 0.62f); set ("satType", 2.0f); set ("bias", 0.15f); set ("vowel", 0.55f); set ("shift", 2.0f); set ("focus", 0.6f);
     set ("lfoDepth", 0.3f); set ("crossover", 110.0f); set ("postOn", 1.0f); set ("postCut", 7200.0f); set ("postRes", 1.2f); set ("mix", 0.9f);
     set ("outGain", -1.5f);
+    if (mode.isEmpty() || mode == "presets") proc.presets.loadFactory (4);
     if (mode == "off") set ("formantOn", 0.0f);
     if (mode == "params")
     {
@@ -33,8 +36,9 @@ int main (int argc, char** argv)
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* e = dynamic_cast<GrowlEditor*> (ed.get());
     if (mode == "banner") { gw::upd::Info i; i.version = "1.1.0"; i.url = "https://cmplxty.music/plugins/growl-saturator/"; i.notes = "New vowel presets, smoother LFO"; e->demoBanner (i); }
-    if (mode == "keys") { auto r = e->auditKeyboard(); std::printf ("%s", r.toRawUTF8()); auto m = e->auditMenus(); std::printf ("%s", m.toRawUTF8()); return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK")) ? 0 : 1; }
+    if (mode == "keys") { auto r = e->auditKeyboard(); std::printf ("%s", r.toRawUTF8()); auto m = e->auditMenus(); std::printf ("%s", m.toRawUTF8()); auto pa = pk::test::auditPresets (*e, e->getPresetBar(), e->getPresetMenu(), proc.presets); std::printf ("%s", pa.toRawUTF8()); return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK") && pa.contains ("PRESET AUDIT OK")) ? 0 : 1; }
     if (mode == "menu") e->demoKnobMenu();
+    if (mode == "presets") e->getPresetBar().openMenu();
     ed->setVisible (true);
     juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);

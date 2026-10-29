@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(Growl VERSION 1.0.1 LANGUAGES C CXX)
+project(Growl VERSION 1.0.2 LANGUAGES C CXX)
+# Linux builds are for the tests only; the box sysroot has no libxi headers
+if(UNIX AND NOT APPLE)
+    add_compile_definitions(JUCE_USE_XINPUT=0)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -38,6 +42,7 @@ juce_add_binary_data(GWAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fon
 set_target_properties(GWAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_sources(Growl PRIVATE
+    src/Presets.cpp
     src/PluginProcessor.cpp
     src/PluginEditor.cpp)
 
@@ -67,7 +72,7 @@ set_target_properties(GrowlUpdateTest PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # Renders the real editor to a PNG (run under Xvfb on Linux):  GrowlScreenshot out.png [banner|menu]
 juce_add_console_app(GrowlScreenshot PRODUCT_NAME "GrowlScreenshot")
-target_sources(GrowlScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp)
+target_sources(GrowlScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Presets.cpp)
 target_include_directories(GrowlScreenshot PRIVATE src)
 target_link_libraries(GrowlScreenshot PRIVATE GWAssets juce::juce_audio_utils juce::juce_recommended_config_flags)
 target_compile_definitions(GrowlScreenshot PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
