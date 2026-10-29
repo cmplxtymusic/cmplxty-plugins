@@ -1,0 +1,27 @@
+CMPLXTY VVITCH
+Copyright (c) CMPLXTY
+
+CMPLXTY VVITCH is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License, version 3, as published by the Free Software Foundation. It is distributed WITHOUT ANY
+WARRANTY. See https://www.gnu.org/licenses/gpl-3.0.html
+
+The complete corresponding source code, the build scripts, the JUCE patch and this installer's script are
+published with the download: CMPLXTY-VVITCH-source-1.0.0.zip (same folder as the installer) and in the
+GitHub repository https://github.com/cmplxtymusic/cmplxty-plugins (folder vvitch).
+
+Built with the JUCE framework 9.0.4 (https://juce.com), used under the GNU General Public License v3, with a
+small patch (static comctl32/TaskDialog import removed so the plug-in also loads in older hosts such as FL
+Studio; VBlank thread shutdown fix). CLAP support: clap-juce-extensions (MIT) and the CLAP headers (MIT).
+
+VST is a trademark of Steinberg Media Technologies GmbH. The VST3 interface headers are used under the
+VST 3 SDK licence (dual GPLv3 / Steinberg proprietary). CLAP is an open plug-in standard (https://cleveraudio.org).
+
+Fonts embedded in the user interface (SIL Open Font License 1.1):
+  Barlow (c) 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+  UnifrakturMaguntia (c) 2010 j. 'mach' wust (https://github.com/googlefonts/unifraktur), OFL 1.1
+
+What is installed
+  VST3: <Common Files>\VST3\CMPLXTY VVITCH.vst3
+  CLAP: <Common Files>\CLAP\CMPLXTY VVITCH.clap
+  (all users: C:\Program Files\Common Files; current user: %LOCALAPPDATA%\Programs\Common)
+  Plug-in settings are stored in %APPDATA%\CMPLXTY\VVITCH and are kept on update and uninstall.

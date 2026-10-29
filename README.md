@@ -16,6 +16,7 @@ Free, open-source audio plugins by Sam Arnstein (CMPLXTY), for Windows and macOS
 | Cyber Wavetable | [`cyber-wavetable/`](cyber-wavetable/) | Wavetable synth |
 | Drum Player | [`drum-player/`](drum-player/) | 8-pad drum sampler |
 | Neon FX | [`neon-fx/`](neon-fx/) | Stutter / tape-stop / filter / drive performance effect |
+| VVITCH | [`vvitch/`](vvitch/) | Witch house polysynth (chip, tape, choral vox, DRAG) |
 | Visualizer | [`visualizer/`](visualizer/) | Music-reactive visuals with your own JPG/PNG images |
 | Quartz | [`quartz/`](quartz/) | Saturation / distortion engine (VST3, AGPLv3) |
 | Yoink | [`yoink/`](yoink/) | Find YouTube clips by phrase and drag the audio into your DAW (MIT) |

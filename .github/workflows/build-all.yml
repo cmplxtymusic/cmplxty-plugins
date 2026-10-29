@@ -31,3 +31,5 @@ jobs:
     uses: ./.github/workflows/sidechain-shaper.yml
   vocal-aligner:
     uses: ./.github/workflows/vocal-aligner.yml
+  vvitch:
+    uses: ./.github/workflows/vvitch.yml
