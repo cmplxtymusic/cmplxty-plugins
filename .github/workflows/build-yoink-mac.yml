@@ -1,0 +1,65 @@
+# Builds the macOS Yoink.dmg (universal: Apple Silicon + Intel), prints its SHA256 and uploads it as a downloadable artifact.
+# Run it by hand: GitHub > Actions > "Build Yoink for Mac" > Run workflow. Free for public repos; private repos use free-plan minutes (macOS minutes count 10x).
+# Yoink lives in the yoink/ folder of this repo.
+# No Apple account is needed. Without the optional secrets below the app is ad-hoc signed (Gatekeeper shows a warning on first open).
+# Optional secrets (only if an Apple Developer ID is ever bought): CSC_LINK (base64 .p12), CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID.
+name: Build Yoink for Mac
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['yoink-mac-v*']
+
+jobs:
+  build:
+    runs-on: macos-latest   # Apple Silicon runner; the Intel half is cross-compiled
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: yoink
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: yoink/package-lock.json
+      - name: Install packages
+        run: npm ci
+      - name: Fetch yt-dlp and build ffmpeg (audio-only, LGPL)
+        run: bash build-mac.sh tools
+      - name: Stage the Clean up engine (onnxruntime) for both CPUs
+        run: bash build-mac.sh stage
+      - name: Run the tests
+        run: |
+          npm test
+          npm run test:mac
+      - name: Build the .dmg
+        run: bash build-mac.sh dmg
+      - name: Check the result
+        run: |
+          set -e
+          lipo -info dist-mac/mac-universal/Yoink.app/Contents/MacOS/Yoink
+          lipo -info dist-mac/mac-universal/Yoink.app/Contents/Resources/bin/ffmpeg
+          lipo -info dist-mac/mac-universal/Yoink.app/Contents/Resources/bin/yt-dlp
+          codesign --verify --deep --strict --verbose=2 dist-mac/mac-universal/Yoink.app || echo "(codesign verify reported a problem: see above)"
+          codesign -dv dist-mac/mac-universal/Yoink.app 2>&1 | head -8 || true
+          ls -la dist-mac/Yoink.dmg
+          echo "SHA256:"; cat dist-mac/Yoink.dmg.sha256
+      - name: Put the SHA256 in the run summary
+        run: |
+          { echo "### Yoink.dmg"; echo; echo '```'; cat dist-mac/Yoink.dmg.sha256; echo '```'; ls -l dist-mac/Yoink.dmg | awk '{print "size: " $5 " bytes"}'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yoink-mac-dmg
+          path: |
+            yoink/dist-mac/Yoink.dmg
+            yoink/dist-mac/Yoink.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30

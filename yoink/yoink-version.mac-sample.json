@@ -1,0 +1,15 @@
+{
+  "version": "2.1.0",
+  "url": "https://cmplxty.music/easter-egg/",
+  "installer": "https://cmplxty.music/yoink.exe",
+  "sha256": "0216562a13ec07bdfa0923ef75567501a564fd93255bfef0e906b7f40db9f15d",
+  "size": 127847709,
+  "notes": "Clean up vocals, advanced filters, key detection, optional sign-in, Load more fix.",
+  "mac": {
+    "version": "2.1.0",
+    "installer": "https://cmplxty.music/yoink.dmg",
+    "sha256": "REPLACE_WITH_SHA256_OF_Yoink.dmg",
+    "size": 0,
+    "notes": "First Mac release."
+  }
+}

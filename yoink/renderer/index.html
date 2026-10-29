@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Yoink</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src file: 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="updBanner" class="banner hidden" role="status">
+  <span id="updText" class="btext"></span>
+  <span id="updProg" class="bprog hidden"><span class="bbar"><span id="updBar"></span></span><span id="updPct"></span></span>
+  <span class="bbtns">
+    <button id="btnUpdNow" class="primary small">Update now</button>
+    <button id="btnUpdLater" class="ghost small">Later</button>
+    <button id="btnUpdSkip" class="ghost small">Skip this version</button>
+    <button id="btnUpdCancel" class="ghost small hidden">Cancel</button>
+  </span>
+</div>
+<header>
+  <button id="btnMute" class="icon" title="Mute or unmute previews">&#128266;</button>
+  <img src="../assets/logo.png" alt="CMPLXTY" class="logo">
+  <div class="brand"><span class="name">YOINK</span><span class="tag">say it &rarr; find it &rarr; drag it</span></div>
+  <button id="btnHistory" class="ghost">History</button>
+  <button id="btnFavs" class="ghost">Favorites</button>
+  <button id="btnSettings" class="ghost">Settings</button>
+</header>
+
+<main>
+  <form id="searchForm" autocomplete="off">
+    <input id="phrase" type="text" placeholder="Type a phrase people say... e.g. get low" spellcheck="false" autofocus>
+    <button id="btnGo" type="submit" class="primary">Search</button>
+    <button id="btnStop" type="button" class="ghost hidden">Stop</button>
+  </form>
+
+  <section id="filters" class="filters">
+    <button type="button" id="fCC" class="chipbtn" aria-pressed="false">Creative Commons</button>
+    <button type="button" id="fManual" class="chipbtn" aria-pressed="false">Manual subtitles</button>
+    <label class="f">Language<select id="fLanguage"></select></label>
+    <label class="f">Category<select id="fCategory"></select></label>
+    <label class="f" title="Approximate: biases which YouTube results come back, it does not read the uploader's country.">Country (search region)<select id="fRegion"></select></label>
+    <button type="button" id="btnClearFilters" class="ghost small">Clear filters</button>
+    <details id="advFilters" class="adv">
+      <summary>Advanced filters <span id="advBadge" class="badge hidden" title="Advanced filters in use"></span></summary>
+      <div class="advBody">
+        <label class="f">Channel<input id="fChannel" type="text" placeholder="Any"></label>
+        <label class="f">Title<input id="fTitle" type="text" placeholder="Any"></label>
+        <label class="f short">Views<span class="pair"><input id="fViewsMin" type="text" inputmode="numeric" placeholder="Min"><input id="fViewsMax" type="text" inputmode="numeric" placeholder="Max"></span></label>
+        <label class="f short">Uploaded<span class="pair"><input id="fFrom" type="text" placeholder="YYYY/MM"><span class="to">to</span><input id="fTo" type="text" placeholder="YYYY/MM"></span></label>
+      </div>
+    </details>
+  </section>
+
+  <div class="toolbar">
+    <div id="statusWrap" class="status">
+      <span id="count" class="count hidden" title="This counts the videos Yoink scanned, not all of YouTube."></span>
+      <span id="status">Type a phrase and press Search. Clips show up here as soon as they're found.</span>
+    </div>
+    <button id="btnFolder" class="ghost">Open clips folder</button>
+  </div>
+  <div id="empty" class="empty">
+    <p><b>How it works:</b> Yoink searches YouTube captions for the exact words, cuts just that moment, and gives you an audio file.</p>
+    <p>Move the <b>start and end flags</b> on the waveform to trim. Press <b>Play</b> to preview. <b>Drag the waveform</b> (or the drag handle) into FL Studio, Ableton, or any folder. Only the trimmed excerpt is ever copied, never the whole video.</p>
+  </div>
+  <ul id="results" class="cards"></ul>
+  <div class="more"><button id="btnMore" class="ghost hidden">Load more</button><div id="noMore" class="nomore hidden">No more results for this search. Try a different phrase or loosen the filters.</div></div>
+</main>
+
+<div id="panel" class="panel hidden">
+  <div class="panelBox wide">
+    <div class="panelHead"><h2 id="panelTitle"></h2><span id="panelActions"></span><button id="panelClose" class="primary small">Close</button></div>
+    <div id="panelBody"></div>
+  </div>
+</div>
+
+<div id="settingsPanel" class="panel hidden">
+  <div class="panelBox">
+    <h2>Settings</h2>
+    <label>Output format
+      <select id="format"><option value="wav">WAV (44.1 kHz, 16-bit)</option><option value="mp3">MP3 (192 kbps)</option><option value="m4a">M4A (AAC, 192 kbps)</option></select>
+    </label>
+    <label>Save clips to
+      <span class="row tight"><input id="outDir" type="text" readonly><button id="btnChoose" class="ghost small">Choose...</button></span>
+    </label>
+    <div class="grid2">
+      <label>Padding before (s)<input id="padBefore" type="number" min="0" max="3" step="0.05"></label>
+      <label>Padding after (s)<input id="padAfter" type="number" min="0" max="3" step="0.05"></label>
+    </div>
+    <label>Clips per search (and per Load more)
+      <input id="maxClips" type="number" min="1" max="50" step="1">
+    </label>
+    <label>Preview volume
+      <input id="volume" type="range" min="0" max="1" step="0.05">
+    </label>
+    <label class="chk"><input id="normalize" type="checkbox"> Normalize volume on export</label>
+    <label class="chk"><input id="fadeOut" type="checkbox"> Fade out the end on export</label>
+    <div class="row"><span>Default filters</span><span><button id="btnSaveDefaults" class="ghost small">Use current filters</button> <button id="btnResetDefaults" class="ghost small">Reset</button></span></div>
+    <div id="defMsg" class="small"></div>
+    <hr>
+    <div class="row"><span>yt-dlp version: <b id="ytVer">...</b></span><button id="btnUpdate" class="ghost small">Update yt-dlp</button></div>
+    <div id="updMsg" class="small"></div>
+    <div class="row"><span>Yoink <b id="appVer">...</b></span><span><button id="btnDlPage" class="ghost small hidden">Download page</button> <button id="btnCheckUpdates" class="ghost small">Check for updates</button></span></div>
+    <label class="chk"><input id="autoUpdate" type="checkbox"> Check for updates when Yoink starts</label>
+    <div class="row"><span>Vocal model: <b id="modelInfo">...</b></span><button id="btnModelRemove" class="ghost small hidden">Remove</button></div>
+    <div id="acctBox" class="hidden">
+      <hr>
+      <div class="row"><span>Account: <b id="acctName">Guest</b></span><span id="acctBtns"></span></div>
+      <div id="acctNote" class="small"></div>
+    </div>
+    <hr>
+    <div class="row"><span>Cache: <b id="cacheSize">...</b></span><button id="btnClearCache" class="ghost small">Clear cache</button></div>
+    <div class="small" id="paths"></div>
+    <div class="row end"><button id="btnClose" class="primary">Done</button></div>
+  </div>
+</div>
+<div id="signinPanel" class="panel hidden">
+  <div class="panelBox">
+    <h2>Sign in?</h2>
+    <p class="lead">Sign in to keep your favorites in sync. You do not need to. Everything works as a guest.</p>
+    <div id="signinOpts"></div>
+    <div id="signinMsg" class="small"></div>
+    <div class="row end"><button id="btnGuest" class="primary">Continue as guest</button></div>
+    <div class="small">You will only be asked this once.</div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

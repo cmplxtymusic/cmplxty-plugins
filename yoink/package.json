@@ -1,0 +1,93 @@
+{
+  "name": "yoink-cmplxty",
+  "productName": "Yoink",
+  "version": "2.1.0",
+  "description": "Type a phrase, find YouTube videos where people actually say it, and drag the audio clip into your DAW. Free, open-source Yoink clone for Windows.",
+  "main": "src/main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron . --no-sandbox",
+    "test": "node tests/unit.js && node tests/loadmore.js && node tests/updater.js && node tests/keydetect.js && node tests/export.js && node tests/vocal.js && node tests/sync.js",
+    "dist": "bash build-win.sh",
+    "stage": "node build/stage-ort.js",
+    "test:ui": "xvfb-run -a node tests/ui-run.js /tmp/yoink-ui-out",
+    "stage:mac": "node build/stage-ort-mac.js",
+    "dist:mac": "bash build-mac.sh",
+    "test:mac": "node tests/updater-mac.js"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "^26.18.0",
+    "onnxruntime-node": "1.31.1"
+  },
+  "author": "CMPLXTY",
+  "homepage": "https://cmplxty.music",
+  "build": {
+    "appId": "com.cmplxty.yoink",
+    "productName": "Yoink",
+    "copyright": "CMPLXTY",
+    "electronVersion": "45.0.0",
+    "electronDist": "build/electron-dist",
+    "electronLanguages": [
+      "en-US"
+    ],
+    "compression": "maximum",
+    "asar": true,
+    "npmRebuild": false,
+    "artifactName": "Yoink-Setup.exe",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "package.json",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "tests/e2e.js",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "build/tools",
+        "to": "bin"
+      },
+      {
+        "from": "build/sync-config.json",
+        "to": "sync-config.json"
+      },
+      {
+        "from": "THIRD-PARTY.txt",
+        "to": "THIRD-PARTY.txt"
+      }
+    ],
+    "afterPack": "build/afterPack.js",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Yoink",
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "uninstallDisplayName": "Yoink",
+      "differentialPackage": false
+    }
+  }
+}

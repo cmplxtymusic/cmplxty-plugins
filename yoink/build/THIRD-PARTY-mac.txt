@@ -1,0 +1,25 @@
+Yoink third-party software
+==========================
+Yoink itself is MIT licensed (CMPLXTY).
+
+Vocal "Clean up" (downloaded on first use, 166 MB):
+  HT-Demucs fine-tuned vocals model, ONNX export with fp16-stored weights
+  Model: https://huggingface.co/StemSplitio/htdemucs-ft-vocals-onnx  (MIT)
+  Original Demucs / HT-Demucs: Copyright (c) Meta Platforms, Inc. and affiliates, MIT License
+  https://github.com/facebookresearch/demucs
+ONNX Runtime (onnxruntime-node, bundled, CPU only; Mac: 1.31.1 on Apple Silicon, 1.23.2 on Intel)
+  Copyright (c) Microsoft Corporation, MIT License  https://github.com/microsoft/onnxruntime
+  See Resources/ort/<cpu>/node_modules/onnxruntime-node/ThirdPartyNotices.txt when present.
+yt-dlp (Unlicense)  https://github.com/yt-dlp/yt-dlp
+FFmpeg 7.1.1 (LGPL build, audio only) with LAME 3.100 (LGPL), built from the official source tarballs by build-ffmpeg-min-mac.sh; see Resources/bin/ffmpeg-LICENSE.txt
+  Source: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz and https://lame.sourceforge.io/
+Electron (MIT) and Chromium (various open-source licenses): https://www.electronjs.org/ and https://chromium.googlesource.com/chromium/src/+/main/LICENSE
+
+MIT License text
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright
+  notice and this permission notice shall be included in all copies or substantial portions of the Software.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+  WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

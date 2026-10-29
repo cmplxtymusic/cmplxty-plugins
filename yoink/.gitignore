@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-mac
+dist-lite
+build/electron-dist
+build/tools
+build/tools-lite
+build/tools-mac
+build/ort
+build/ort-mac
+.ffbuild-mac
