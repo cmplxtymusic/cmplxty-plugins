@@ -2,11 +2,20 @@
 # Builds build/tools-mac/ffmpeg: a small audio-only LGPL FFmpeg 7.1.1 + LAME 3.100 for macOS, universal (arm64 + x86_64).
 # Same feature set as build-ffmpeg-min.sh (the Windows one); the only change is Apple's Secure Transport for https instead of Windows' schannel.
 # Needs a Mac with Xcode command line tools (clang, lipo, codesign), make, curl, tar. Run on macOS only (the CI job does this).
-# Not run on a Mac yet: the first CI run is the first real test of this script.
+# The x86_64 slice uses nasm for handwritten assembly when it is installed. GitHub's macOS image does not include nasm;
+# this script installs it with Homebrew when that is available, and otherwise configures ffmpeg with --disable-x86asm
+# (the C implementations still build; ffmpeg's own configure refuses the x86 target without one of those two).
 set -euo pipefail
 [ "$(uname -s)" = "Darwin" ] || { echo "build-ffmpeg-min-mac.sh must run on macOS" >&2; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 W="${W:-$HERE/.ffbuild-mac}"; mkdir -p "$W"; cd "$W"
+if ! command -v nasm >/dev/null 2>&1 && ! command -v yasm >/dev/null 2>&1; then
+  if command -v brew >/dev/null 2>&1; then
+    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install nasm
+  else
+    echo "nasm/yasm not found and Homebrew is unavailable; the x86_64 ffmpeg slice will be built with --disable-x86asm"
+  fi
+fi
 MINOS=13.0
 NCPU="$(sysctl -n hw.ncpu)"
 FFV=7.1.1; LAMEV=3.100
@@ -24,8 +33,13 @@ build_arch() {
   mkdir "lame-$LAMEV-$arch" && tar xzf lame.tar.gz -C "lame-$LAMEV-$arch" --strip-components=1
   mkdir "ffmpeg-$FFV-$arch" && tar xJf ffmpeg.tar.xz -C "ffmpeg-$FFV-$arch" --strip-components=1
   local CC="clang -arch $arch -mmacosx-version-min=$MINOS"
+  local x86asm=()
+  if [ "$arch" = "x86_64" ] && ! command -v nasm >/dev/null 2>&1 && ! command -v yasm >/dev/null 2>&1; then
+    x86asm+=(--disable-x86asm)
+  fi
   (cd "lame-$LAMEV-$arch" && CC="$CC" ./configure --host="$triple" --prefix="$P" --disable-shared --enable-static --disable-frontend --disable-decoder >/dev/null && make -j"$NCPU" >/dev/null && make install >/dev/null)
   (cd "ffmpeg-$FFV-$arch" && PKG_CONFIG_PATH="$P/lib/pkgconfig" ./configure --arch="$arch" --target-os=darwin --enable-cross-compile --cc="$CC" --pkg-config-flags=--static \
+    ${x86asm+"${x86asm[@]}"} \
     --extra-cflags="-I$P/include" --extra-ldflags="-L$P/lib" \
     --disable-everything --disable-autodetect --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
     --enable-ffmpeg --enable-network --enable-securetransport --enable-libmp3lame \
