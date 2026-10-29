@@ -1,0 +1,152 @@
+# CMPLXTY Rewired (audio to MIDI) - CI for github.com/cmplxtymusic/cmplxty-plugins (project lives in the rewired/ folder).
+# GitHub only reads workflows from the repository root: this file belongs at .github/workflows/rewired.yml
+# (a copy is kept at rewired/ci/rewired.yml).
+# STATUS: not yet run on GitHub. The Windows job mirrors the local, tested box build;
+# the macOS job has never run on a Mac. Installers are UNSIGNED (Windows SmartScreen / macOS Gatekeeper will warn).
+name: rewired
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    tags: ['rewired-v*']
+    paths: ['rewired/**', '.github/workflows/rewired.yml']
+  pull_request:
+    paths: ['rewired/**', '.github/workflows/rewired.yml']
+defaults:
+  run:
+    shell: bash
+    working-directory: rewired
+env:
+  LLVM_VERSION: '23.1.4'
+  XWIN_VERSION: '0.10.0'
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libxcomposite-dev libxext-dev libgl1-mesa-dev
+      - run: ./scripts/fetch-deps.sh
+      - name: Build VST3 + CLAP + Standalone
+        run: |
+          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF -DCLAP_JUCE_EXTENSIONS_BUILD_EXAMPLES=OFF
+          cmake --build build/linux --target Rewired_VST3 Rewired_CLAP Rewired_Standalone RewiredUpdateTest --parallel
+      - name: DSP + update-logic tests
+        run: |
+          g++ -std=c++17 -O2 test/dsp_test.cpp -o /tmp/dsp_test -ldl -pthread && /tmp/dsp_test
+          build/linux/RewiredUpdateTest_artefacts/Release/RewiredUpdateTest
+      - name: Package
+        run: |
+          mkdir -p ../out/linux
+          cp -r build/linux/Rewired_artefacts/Release/VST3 build/linux/Rewired_artefacts/Release/CLAP build/linux/Rewired_artefacts/Release/Standalone ../out/linux/
+          mkdir -p ../out/moduleinfo
+          cp "build/linux/Rewired_artefacts/Release/VST3/CMPLXTY Rewired.vst3/Contents/Resources/moduleinfo.json" ../out/moduleinfo/
+      - uses: actions/upload-artifact@v4
+        with: { name: rewired-linux, path: out/linux }
+      - uses: actions/upload-artifact@v4
+        with: { name: rewired-moduleinfo, path: out/moduleinfo }
+
+  windows:
+    # cross-compiled on Linux with clang-cl + xwin (static /MT CRT, no Visual C++ redistributable needed), packed with NSIS
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: rewired-moduleinfo, path: rewired/build/linux/Rewired_artefacts/Release/VST3/CMPLXTY Rewired.vst3/Contents/Resources }
+      - name: Tools (NSIS, ninja, host compiler for juceaide)
+        run: sudo apt-get update && sudo apt-get install -y nsis ninja-build g++ libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev
+      - uses: actions/cache@v4
+        id: toolcache
+        with:
+          path: |
+            ~/.local/llvm
+            ~/.local/xwin-sdk
+          key: llvm-${{ env.LLVM_VERSION }}-xwin-${{ env.XWIN_VERSION }}
+      - name: LLVM + Windows SDK/CRT (xwin; accepting the Microsoft licence)
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/llvm ~/.local/bin /tmp/dl && cd /tmp/dl
+          curl -fsSL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/LLVM-$LLVM_VERSION-Linux-X64.tar.xz"
+          tar -xf llvm.tar.xz -C ~/.local/llvm --strip-components=1
+          curl -fsSL -o xwin.tar.gz "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf xwin.tar.gz --strip-components=1 -C ~/.local/bin
+          ~/.local/bin/xwin --accept-license --arch x86_64 --variant desktop splat --output ~/.local/xwin-sdk
+      - run: ./scripts/fetch-deps.sh
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/cache@v4
+        with: { path: rewired/build/models, key: "rewired-models-${{ hashFiles('rewired/scripts/fetch-models.sh', 'rewired/tools/spleeter_to_onnx.py') }}" }
+      - name: Models + ONNX Runtime (Spleeter 4stems MIT -> ONNX, basic-pitch Apache-2.0, ORT 1.23.2 MIT)
+        run: |
+          [ -f build/models/spleeter4.onnx ] || pip install --quiet 'tensorflow-cpu==2.17.*' onnx numpy
+          ./scripts/fetch-models.sh
+      - run: RW_MODELS=build/models RW_ORT_WIN=build/models/ort/win-x64/onnxruntime.dll ./scripts/build-windows-xwin.sh
+      - run: ./scripts/build-installer.sh
+      - name: Check ProductName / ProductVersion metadata (SignPath)
+        run: |
+          pip install --quiet pefile
+          S=dist/stage-windows-x64
+          python3 ../tools/check-win-metadata.py . "$S/CMPLXTY Rewired.vst3/Contents/x86_64-win/CMPLXTY Rewired.vst3" "$S/CMPLXTY Rewired.clap" "$S/CMPLXTY Rewired.exe" dist/*-win.exe
+      - name: Checksum
+        run: cd dist && sha256sum CMPLXTY-Rewired-Setup-*-win.exe | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rewired-windows-installer
+          path: |
+            rewired/dist/CMPLXTY-Rewired-Setup-*-win.exe
+            rewired/dist/SHA256SUMS
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja
+      - run: ./scripts/fetch-deps.sh
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/cache@v4
+        with: { path: rewired/build/models, key: "rewired-models-${{ hashFiles('rewired/scripts/fetch-models.sh', 'rewired/tools/spleeter_to_onnx.py') }}" }
+      - name: Models + ONNX Runtime (Spleeter 4stems MIT -> ONNX, basic-pitch Apache-2.0, ORT 1.23.2 MIT)
+        run: |
+          [ -f build/models/spleeter4.onnx ] || pip install --quiet 'tensorflow-cpu==2.17.*' onnx numpy
+          ./scripts/fetch-models.sh
+      - name: Universal VST3 + CLAP + app + models -> .pkg
+        run: ./scripts/build-macos-pkg.sh
+      - name: Checksum
+        run: cd dist && shasum -a 256 CMPLXTY-Rewired-Setup-*-mac.pkg | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rewired-macos-installer
+          path: |
+            rewired/dist/CMPLXTY-Rewired-Setup-*-mac.pkg
+            rewired/dist/SHA256SUMS
+
+  release:
+    # only on a version tag; every asset is built by the jobs above on GitHub-hosted runners, never on a dev machine
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rewired-v')
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: rewired-windows-installer, path: win }
+      - uses: actions/download-artifact@v4
+        with: { name: rewired-macos-installer, path: mac }
+      - name: Combined SHA256SUMS
+        run: |
+          mkdir rel && cp win/*.exe mac/*.pkg rel/
+          cd rel && sha256sum * | tee SHA256SUMS
+      - name: GitHub release (draft; publish by hand)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" rel/* --repo "$GITHUB_REPOSITORY" --draft --title "$GITHUB_REF_NAME" \
+            --notes "Built by GitHub Actions run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

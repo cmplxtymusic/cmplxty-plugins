@@ -1,0 +1,36 @@
+CMPLXTY Rewired
+Copyright (c) CMPLXTY
+
+CMPLXTY Rewired is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License, version 3, as published by the Free Software Foundation. It is distributed WITHOUT ANY
+WARRANTY. See https://www.gnu.org/licenses/gpl-3.0.html
+
+The complete corresponding source code, the build scripts, the JUCE patch and this installer's script are
+published with the download: CMPLXTY-Rewired-source-1.0.0.zip (same folder as the installer) and in the
+GitHub repository https://github.com/cmplxtymusic/cmplxty-plugins (folder rewired).
+
+Built with the JUCE framework 9.0.4 (https://juce.com), used under the GNU General Public License v3, with a
+small patch (static comctl32/TaskDialog import removed so the plug-in also loads in older hosts such as FL
+Studio; VBlank thread shutdown fix). CLAP support: clap-juce-extensions (MIT) and the CLAP headers (MIT).
+
+VST is a trademark of Steinberg Media Technologies GmbH. The VST3 interface headers are used under the
+VST 3 SDK licence (dual GPLv3 / Steinberg proprietary). CLAP is an open plug-in standard (https://cleveraudio.org).
+
+Font embedded in the user interface (SIL Open Font License 1.1):
+  Barlow (c) 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+
+What is installed
+  VST3: <Common Files>\VST3\CMPLXTY Rewired.vst3
+  CLAP: <Common Files>\CLAP\CMPLXTY Rewired.clap
+  (all users: C:\Program Files\Common Files; current user: %LOCALAPPDATA%\Programs\Common)
+  Plug-in settings are stored in %APPDATA%\CMPLXTY\Rewired and are kept on update and uninstall.
+
+Models and runtime installed with Rewired (Common Files\CMPLXTY\Rewired / /Library/Application Support/CMPLXTY/Rewired):
+  spleeter4.onnx - Deezer Spleeter 4stems source separation model, (c) 2019 Deezer, MIT licence
+    (https://github.com/deezer/spleeter). Converted from the official TF checkpoint to ONNX (fp16 weights) by
+    tools/spleeter_to_onnx.py in the source.
+  nmp.onnx - Spotify basic-pitch 0.4.0 note/onset/pitch model, (c) 2022 Spotify AB, Apache License 2.0
+    (https://github.com/spotify/basic-pitch, http://www.apache.org/licenses/LICENSE-2.0). Unmodified.
+  cmplxty-rewired-ort.dll / libonnxruntime.1.23.2.dylib - ONNX Runtime 1.23.2, (c) Microsoft Corporation,
+    MIT licence (https://github.com/microsoft/onnxruntime). Unmodified binary, renamed on Windows.
+The MIT and Apache-2.0 licences are compatible with GPLv3; the full texts are in THIRD-PARTY-LICENSES.txt.

@@ -33,3 +33,5 @@ jobs:
     uses: ./.github/workflows/vocal-aligner.yml
   vvitch:
     uses: ./.github/workflows/vvitch.yml
+  rewired:
+    uses: ./.github/workflows/rewired.yml
