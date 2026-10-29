@@ -1,0 +1,67 @@
+// Cyber Wavetable factory presets: only the values that differ from the defaults (real units; choices by index).
+// banks 0 Analog 1 Digital 2 Vocal 3 Sync 4 Metal 5 Chip.  fType 0 LP12 1 LP24 2 BP 3 HP.  LFO shape 0 Sine 1 Tri 2 Saw 3 Square 4 S&H.
+// mod src 1 LFO1 2 LFO2 3 ModEnv 4 Vel 5 Wheel 6 Note 7 Pressure.
+// mod dst 1 APos 2 BPos 3 BothPos 4 APitch 5 BPitch 6 Pitch 7 Cutoff 8 Reso 9 ALevel 10 BLevel 11 Detune 12 Pan 13 Amp 14 Noise.
+#include "PresetManager.h"
+
+const std::vector<cw::FactoryPreset>& cw::factoryPresets()
+{
+    static const std::vector<FactoryPreset> p {
+        { "Init", {} },
+        { "Neon Supersaw", { { "aPos", 0.5f }, { "aUni", 7 }, { "aDetune", 0.45f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.5f }, { "bSemi", 12 }, { "bUni", 5 }, { "bDetune", 0.35f }, { "bLevel", 0.4f },
+                             { "width", 1.0f }, { "fType", 0 }, { "cutoff", 9000 }, { "reso", 0.1f }, { "ampA", 8 }, { "ampR", 450 }, { "m1Src", 5 }, { "m1Dst", 11 }, { "m1Amt", 0.5f } } },
+        { "Night City Pad", { { "aBank", 2 }, { "aPos", 0.2f }, { "aUni", 5 }, { "aDetune", 0.3f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.15f }, { "bFine", 7 }, { "bUni", 3 }, { "width", 0.9f },
+                              { "cutoff", 2400 }, { "reso", 0.2f }, { "ampA", 900 }, { "ampD", 1500 }, { "ampS", 0.9f }, { "ampR", 2500 }, { "l1Rate", 0.12f }, { "l2Rate", 0.07f },
+                              { "m1Src", 1 }, { "m1Dst", 1 }, { "m1Amt", 0.6f }, { "m2Src", 2 }, { "m2Dst", 7 }, { "m2Amt", 0.25f }, { "m3Src", 5 }, { "m3Dst", 7 }, { "m3Amt", 0.4f } } },
+        { "Chrome Pluck", { { "aBank", 4 }, { "aPos", 0.35f }, { "bOn", 1 }, { "bBank", 1 }, { "bPos", 0.6f }, { "bSemi", 12 }, { "bLevel", 0.35f }, { "fType", 1 }, { "cutoff", 600 }, { "reso", 0.35f },
+                            { "fEnv", 0.75f }, { "ampA", 1 }, { "ampD", 420 }, { "ampS", 0 }, { "ampR", 380 }, { "modA", 1 }, { "modD", 260 }, { "voices", 12 }, { "m1Src", 4 }, { "m1Dst", 7 }, { "m1Amt", 0.3f } } },
+        { "Grid Runner Bass", { { "aPos", 0.6f }, { "aUni", 2 }, { "aDetune", 0.12f }, { "sub", 0.7f }, { "fType", 1 }, { "cutoff", 220 }, { "reso", 0.45f }, { "fDrive", 0.55f }, { "fEnv", 0.55f },
+                                { "fKey", 0.5f }, { "ampA", 1 }, { "ampD", 300 }, { "ampS", 0.7f }, { "ampR", 90 }, { "modD", 220 }, { "voices", 1 }, { "glide", 40 }, { "volume", -5 } } },
+        { "Replicant Lead", { { "aBank", 3 }, { "aPos", 0.4f }, { "aUni", 3 }, { "aDetune", 0.15f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.75f }, { "bSemi", -12 }, { "bLevel", 0.45f },
+                              { "cutoff", 5000 }, { "reso", 0.25f }, { "fDrive", 0.3f }, { "voices", 1 }, { "glide", 80 }, { "ampR", 250 }, { "l1Rate", 5.5f },
+                              { "m1Src", 5 }, { "m1Dst", 6 }, { "m1Amt", 0.012f }, { "m2Src", 3 }, { "m2Dst", 1 }, { "m2Amt", 0.5f }, { "m3Src", 1 }, { "m3Dst", 6 }, { "m3Amt", 0.0f } } },
+        { "Data Stream Arp", { { "aBank", 5 }, { "aPos", 0.3f }, { "bOn", 1 }, { "bBank", 5 }, { "bPos", 0.7f }, { "bSemi", 7 }, { "bLevel", 0.5f }, { "cutoff", 6500 }, { "ampA", 1 }, { "ampD", 180 },
+                               { "ampS", 0 }, { "ampR", 120 }, { "l1Shape", 4 }, { "l1Rate", 8 }, { "m1Src", 1 }, { "m1Dst", 3 }, { "m1Amt", 0.5f }, { "voices", 8 } } },
+        { "Synthwave Brass", { { "aPos", 0.5f }, { "aUni", 4 }, { "aDetune", 0.25f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.55f }, { "bFine", -8 }, { "bLevel", 0.6f }, { "fType", 1 }, { "cutoff", 700 },
+                               { "reso", 0.15f }, { "fEnv", 0.55f }, { "modA", 60 }, { "modD", 700 }, { "modS", 0.35f }, { "ampA", 40 }, { "ampR", 400 }, { "m1Src", 4 }, { "m1Dst", 7 }, { "m1Amt", 0.25f } } },
+        { "Vocoder Ghost", { { "aBank", 2 }, { "aPos", 0.0f }, { "aUni", 3 }, { "aDetune", 0.2f }, { "noise", 0.08f }, { "fType", 2 }, { "cutoff", 1400 }, { "reso", 0.4f }, { "ampA", 250 },
+                             { "ampR", 1200 }, { "l1Rate", 0.6f }, { "l1Shape", 1 }, { "m1Src", 1 }, { "m1Dst", 1 }, { "m1Amt", 1.0f }, { "m2Src", 5 }, { "m2Dst", 7 }, { "m2Amt", 0.5f } } },
+        { "Glitch Sync", { { "aBank", 3 }, { "aPos", 0.1f }, { "aUni", 2 }, { "aDetune", 0.1f }, { "cutoff", 8000 }, { "fDrive", 0.4f }, { "modA", 1 }, { "modD", 600 }, { "ampR", 200 },
+                           { "l2Shape", 4 }, { "l2Rate", 12 }, { "m1Src", 3 }, { "m1Dst", 1 }, { "m1Amt", 0.9f }, { "m2Src", 2 }, { "m2Dst", 12 }, { "m2Amt", 0.6f } } },
+        { "Megacorp Reese", { { "aPos", 0.5f }, { "aUni", 2 }, { "aDetune", 0.3f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.5f }, { "bFine", 18 }, { "bUni", 2 }, { "bDetune", 0.3f }, { "bLevel", 0.8f },
+                              { "sub", 0.5f }, { "fType", 1 }, { "cutoff", 900 }, { "reso", 0.2f }, { "fDrive", 0.4f }, { "voices", 1 }, { "l1Rate", 0.25f },
+                              { "m1Src", 1 }, { "m1Dst", 7 }, { "m1Amt", 0.25f }, { "m2Src", 5 }, { "m2Dst", 7 }, { "m2Amt", 0.6f }, { "volume", -7 } } },
+        { "Hologram Bells", { { "aBank", 4 }, { "aPos", 0.65f }, { "bOn", 1 }, { "bBank", 4 }, { "bPos", 0.25f }, { "bSemi", 19 }, { "bLevel", 0.35f }, { "cutoff", 14000 }, { "ampA", 1 }, { "ampD", 2200 },
+                              { "ampS", 0 }, { "ampR", 2000 }, { "width", 0.8f }, { "voices", 12 }, { "m1Src", 4 }, { "m1Dst", 1 }, { "m1Amt", 0.3f } } },
+        { "Acid Implant", { { "aPos", 0.5f }, { "fType", 1 }, { "cutoff", 300 }, { "reso", 0.75f }, { "fDrive", 0.6f }, { "fEnv", 0.6f }, { "modA", 1 }, { "modD", 180 }, { "ampA", 1 }, { "ampD", 250 },
+                            { "ampS", 0.6f }, { "ampR", 60 }, { "voices", 1 }, { "glide", 60 }, { "m1Src", 4 }, { "m1Dst", 7 }, { "m1Amt", 0.35f }, { "m2Src", 5 }, { "m2Dst", 8 }, { "m2Amt", 0.25f } } },
+        { "Chiptune Hacker", { { "aBank", 5 }, { "aPos", 0.5f }, { "bOn", 1 }, { "bBank", 5 }, { "bPos", 0.9f }, { "bSemi", 12 }, { "bLevel", 0.3f }, { "cutoff", 20000 }, { "reso", 0 }, { "fKey", 0 },
+                               { "ampA", 1 }, { "ampD", 120 }, { "ampS", 0.6f }, { "ampR", 40 }, { "l1Rate", 6 }, { "m1Src", 5 }, { "m1Dst", 6 }, { "m1Amt", 0.01f }, { "voices", 4 } } },
+        { "Rain On Chrome", { { "aBank", 1 }, { "aPos", 0.3f }, { "aUni", 4 }, { "aDetune", 0.2f }, { "noise", 0.15f }, { "fType", 2 }, { "cutoff", 1800 }, { "reso", 0.2f }, { "ampA", 250 }, { "ampR", 2000 }, { "volume", 0 },
+                              { "width", 1.0f }, { "l1Shape", 4 }, { "l1Rate", 3 }, { "l2Rate", 0.1f }, { "m1Src", 1 }, { "m1Dst", 3 }, { "m1Amt", 0.35f }, { "m2Src", 2 }, { "m2Dst", 7 }, { "m2Amt", 0.3f } } },
+        { "Overdrive Protocol", { { "aBank", 1 }, { "aPos", 0.7f }, { "aUni", 3 }, { "aDetune", 0.2f }, { "bOn", 1 }, { "bBank", 3 }, { "bPos", 0.5f }, { "bSemi", -12 }, { "sub", 0.3f },
+                                  { "fType", 0 }, { "cutoff", 3500 }, { "reso", 0.3f }, { "fDrive", 0.9f }, { "voices", 4 }, { "ampR", 200 }, { "volume", -9 }, { "m1Src", 5 }, { "m1Dst", 3 }, { "m1Amt", 0.5f } } },
+        { "Deep Net Drone", { { "aBank", 4 }, { "aPos", 0.1f }, { "aUni", 5 }, { "aDetune", 0.12f }, { "bOn", 1 }, { "bBank", 2 }, { "bPos", 0.5f }, { "bSemi", -12 }, { "sub", 0.4f }, { "cutoff", 1200 },
+                              { "reso", 0.3f }, { "ampA", 2500 }, { "ampR", 4000 }, { "l1Rate", 0.05f }, { "l2Rate", 0.11f }, { "l2Shape", 0 },
+                              { "m1Src", 1 }, { "m1Dst", 1 }, { "m1Amt", 0.8f }, { "m2Src", 2 }, { "m2Dst", 2 }, { "m2Amt", 0.8f }, { "m3Src", 2 }, { "m3Dst", 7 }, { "m3Amt", 0.3f } } },
+        { "Cyber Organ", { { "aBank", 0 }, { "aPos", 0.0f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.25f }, { "bSemi", 12 }, { "bLevel", 0.5f }, { "sub", 0.5f }, { "cutoff", 7000 }, { "ampA", 4 },
+                           { "ampS", 1 }, { "ampR", 80 }, { "l1Rate", 6.5f }, { "m1Src", 1 }, { "m1Dst", 9 }, { "m1Amt", 0.15f } } },
+        { "Laser Grid Stab", { { "aBank", 3 }, { "aPos", 0.6f }, { "aUni", 5 }, { "aDetune", 0.3f }, { "fType", 1 }, { "cutoff", 2200 }, { "reso", 0.25f }, { "fEnv", 0.6f }, { "modA", 1 }, { "modD", 150 }, { "volume", -2 },
+                               { "ampA", 1 }, { "ampD", 260 }, { "ampS", 0 }, { "ampR", 200 }, { "width", 0.9f }, { "m1Src", 3 }, { "m1Dst", 1 }, { "m1Amt", -0.4f } } },
+        { "Android Choir", { { "aBank", 2 }, { "aPos", 0.5f }, { "aUni", 6 }, { "aDetune", 0.25f }, { "bOn", 1 }, { "bBank", 2 }, { "bPos", 0.2f }, { "bSemi", 12 }, { "bLevel", 0.35f }, { "cutoff", 4500 },
+                             { "ampA", 700 }, { "ampR", 1800 }, { "width", 1.0f }, { "l1Rate", 0.3f }, { "l1Shape", 1 }, { "m1Src", 1 }, { "m1Dst", 3 }, { "m1Amt", 0.4f }, { "m2Src", 5 }, { "m2Dst", 1 }, { "m2Amt", 0.5f } } },
+        { "Sub Zero Kick Bass", { { "aBank", 0 }, { "aPos", 0.0f }, { "sub", 0.6f }, { "fType", 0 }, { "cutoff", 400 }, { "fDrive", 0.35f }, { "ampA", 1 }, { "ampD", 500 }, { "ampS", 0.4f }, { "ampR", 120 },
+                                  { "modA", 1 }, { "modD", 60 }, { "voices", 1 }, { "m1Src", 3 }, { "m1Dst", 6 }, { "m1Amt", 0.5f }, { "volume", -4 } } },
+        { "Static Interference", { { "aBank", 1 }, { "aPos", 0.9f }, { "noise", 0.35f }, { "fType", 3 }, { "cutoff", 900 }, { "reso", 0.35f }, { "ampA", 50 }, { "ampR", 800 },
+                                   { "l1Shape", 4 }, { "l1Rate", 16 }, { "l2Shape", 2 }, { "l2Rate", 0.5f }, { "m1Src", 1 }, { "m1Dst", 1 }, { "m1Amt", 0.7f }, { "m2Src", 2 }, { "m2Dst", 7 }, { "m2Amt", 0.5f }, { "m3Src", 1 }, { "m3Dst", 12 }, { "m3Amt", 0.5f } } },
+        { "Pressure Wave", { { "aBank", 0 }, { "aPos", 0.75f }, { "aUni", 3 }, { "aDetune", 0.2f }, { "fType", 1 }, { "cutoff", 800 }, { "reso", 0.3f }, { "ampA", 150 }, { "ampR", 700 },
+                             { "m1Src", 7 }, { "m1Dst", 7 }, { "m1Amt", 0.7f }, { "m2Src", 7 }, { "m2Dst", 1 }, { "m2Amt", 0.4f }, { "m3Src", 5 }, { "m3Dst", 11 }, { "m3Amt", 0.6f } } },
+        { "Neural Keys", { { "aBank", 4 }, { "aPos", 0.2f }, { "bOn", 1 }, { "bBank", 0 }, { "bPos", 0.1f }, { "bLevel", 0.6f }, { "cutoff", 5000 }, { "fKey", 0.6f }, { "ampA", 2 }, { "ampD", 1200 },
+                           { "ampS", 0.3f }, { "ampR", 600 }, { "voices", 12 }, { "m1Src", 4 }, { "m1Dst", 7 }, { "m1Amt", 0.4f }, { "m2Src", 4 }, { "m2Dst", 1 }, { "m2Amt", 0.35f } } },
+        { "Blackout Siren", { { "aBank", 3 }, { "aPos", 0.8f }, { "voices", 1 }, { "cutoff", 6000 }, { "fDrive", 0.5f }, { "ampA", 20 }, { "ampR", 500 }, { "l1Rate", 0.8f }, { "l1Shape", 1 },
+                              { "m1Src", 1 }, { "m1Dst", 6 }, { "m1Amt", 0.25f }, { "m2Src", 1 }, { "m2Dst", 1 }, { "m2Amt", 0.4f }, { "volume", -9 } } },
+        { "Metro Rain Lead", { { "aBank", 1 }, { "aPos", 0.45f }, { "aUni", 3 }, { "aDetune", 0.1f }, { "bOn", 1 }, { "bBank", 2 }, { "bPos", 0.6f }, { "bSemi", 7 }, { "bLevel", 0.3f }, { "cutoff", 4200 },
+                               { "reso", 0.3f }, { "voices", 1 }, { "glide", 120 }, { "ampA", 10 }, { "ampR", 500 }, { "l1Rate", 5 }, { "m1Src", 5 }, { "m1Dst", 6 }, { "m1Amt", 0.01f }, { "m2Src", 7 }, { "m2Dst", 2 }, { "m2Amt", 0.5f } } },
+    };
+    return p;
+}
