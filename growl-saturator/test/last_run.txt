@@ -1,0 +1,137 @@
+Growl DSP tests (latency 37 samples)
+
+[1] half-band oversampler
+  mode 0: impulse peak at +0 samples (expected 0), peak value 1.00000
+    f=0.05*fs : gain +0.0000 dB
+    f=0.20*fs : gain +0.0000 dB
+    f=0.35*fs : gain +0.0000 dB
+    f=0.40*fs : gain +0.0000 dB
+  mode 1: impulse peak at +31 samples (expected 31), peak value 0.96929
+    f=0.05*fs : gain +0.0000 dB
+    f=0.20*fs : gain -0.0007 dB
+    f=0.35*fs : gain -0.0014 dB
+    f=0.40*fs : gain -0.0016 dB
+  mode 2: impulse peak at +37 samples (expected 37), peak value 0.96922
+    f=0.05*fs : gain +0.0011 dB
+    f=0.20*fs : gain -0.0007 dB
+    f=0.35*fs : gain -0.0005 dB
+    f=0.40*fs : gain -0.0020 dB
+  down-sampler stop band (tone at 0.475 fs_hi): -100.1 dB
+
+[2] mix = 0 is a bit-exact delayed bypass; latency = 37
+  sr=44100 os=0 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=44100 os=1 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=44100 os=2 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=48000 os=0 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=48000 os=1 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=48000 os=2 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=96000 os=0 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=96000 os=1 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+  sr=96000 os=2 : max |out - in(n-37)| = 0.0e+00   leading zeros max 0.0e+00
+
+[3] all sections off: crossover sums flat (LR8 all-pass), and drive 0 == drive off
+  f=    30 Hz : +0.0000 dB
+  f=    60 Hz : +0.0000 dB
+  f=   100 Hz : +0.0000 dB
+  f=   150 Hz : +0.0000 dB
+  f=   300 Hz : +0.0000 dB
+  f=  1000 Hz : +0.0000 dB
+  f=  5000 Hz : -0.0000 dB
+  f= 12000 Hz : -0.0000 dB
+  f= 18000 Hz : +0.0000 dB
+  os=0: drive=0 vs section off max diff 0.0e+00
+  os=1: drive=0 vs section off max diff 0.0e+00
+  os=2: drive=0 vs section off max diff 0.0e+00
+
+[4] crossover, clean + mono low band
+  fc= 60: HP8 at fc -6.02 dB (LR = -6.02), at fc/2 -48.20 (-48.2), at 4fc -0.000
+  fc=100: HP8 at fc -6.02 dB (LR = -6.02), at fc/2 -48.20 (-48.2), at 4fc -0.000
+  fc=200: HP8 at fc -6.02 dB (LR = -6.02), at fc/2 -48.20 (-48.2), at 4fc -0.000
+  45 Hz sub, drive 100%: fundamental 0.5228 (in 0.5000) = +0.39 dB; total RMS change +0.39 dB (harmonics added by the high band)
+  50 Hz, L=-R, subMono=0: output RMS 0.2828 (input 0.2828)
+  50 Hz, L=-R, subMono=1: output RMS 0.0000 (input 0.2828)
+  sub level -6 dB: 40 Hz -6.00 dB, 4 kHz +0.00 dB
+
+[5] saturator types: harmonic content of a 1 kHz sine, drive 0.4 (+17 dB), formant/post off, 4x
+  tanh  : H2  -196.1 dB  H3   -19.3 dB  THD(2..11)  10.96 %
+  tube  : H2   -23.1 dB  H3   -17.2 dB  THD(2..11)  15.71 %
+  fold  : H2  -186.1 dB  H3   -20.8 dB  THD(2..11)   9.08 %
+  hard  : H2  -178.7 dB  H3   -18.3 dB  THD(2..11)  12.65 %
+  diode : H2   -20.3 dB  H3   -17.4 dB  THD(2..11)  17.26 %
+  tanh + bias 0.5 : H2 -19.0 dB (was -196.1)
+  residual DC with bias: -0.00026
+
+[6] aliasing (coherent sine 3.4 kHz at 48 kHz through hard clip / fold, drive 0.6 = +25 dB). Non-harmonic energy 20 Hz..20 kHz relative to the fundamental
+  tanh  : off   -25.5 dB   2x   -60.1 dB   4x  -109.5 dB   (2x gain +34.6 dB, 4x gain +84.0 dB)
+  fold  : off   -30.1 dB   2x  -107.1 dB   4x  -109.2 dB   (2x gain +77.0 dB, 4x gain +79.1 dB)
+  hard  : off   -21.5 dB   2x   -36.0 dB   4x   -51.0 dB   (2x gain +14.5 dB, 4x gain +29.5 dB)
+
+[7] formant bank (white noise in, drive off, crossover 60 Hz, sub off): spectral peaks
+  vowel 0.50 (AH): peaks 747 / 1139 / 2425 Hz (table 730 / 1090 / 2440)
+  vowel 1.00 (EE): peaks 262 / 2240 / 3079 Hz (table 270 / 2290 / 3010)
+  vowel 0.50 shift +12 st: peaks 1471 / 2240 / 4980 Hz (table x2: 1460 / 2180 / 4880)
+  focus 0: F1 +20.2 dB, 170 Hz above +17.7 dB | focus 1: F1 +19.1 dB, 170 Hz above -10.0 dB
+  amount 0 vs section off: max diff 0.0e+00
+  saw 55 Hz growl, drive 0.6: RMS without formants 0.804, with AH formants 0.576 (-2.9 dB)
+
+[8] tempo-synced vowel LFO
+    90.0 bpm rate 1/4 : period 0.6667 s (expected 0.6667 s)
+    90.0 bpm rate 1/8 : period 0.3333 s (expected 0.3333 s)
+    90.0 bpm rate 1/16: period 0.1667 s (expected 0.1667 s)
+    90.0 bpm rate 1/32: period 0.0833 s (expected 0.0833 s)
+   120.0 bpm rate 1/4 : period 0.5000 s (expected 0.5000 s)
+   120.0 bpm rate 1/8 : period 0.2500 s (expected 0.2500 s)
+   120.0 bpm rate 1/16: period 0.1250 s (expected 0.1250 s)
+   120.0 bpm rate 1/32: period 0.0625 s (expected 0.0625 s)
+   174.0 bpm rate 1/4 : period 0.3448 s (expected 0.3448 s)
+   174.0 bpm rate 1/8 : period 0.1724 s (expected 0.1724 s)
+   174.0 bpm rate 1/16: period 0.0862 s (expected 0.0862 s)
+   174.0 bpm rate 1/32: period 0.0431 s (expected 0.0431 s)
+  ppq 0.25 (rate 1/4): vowel 0.900 (centre 0.5 + depth 0.4 -> peak 0.9)
+  shape 0: vowel range 0.000 .. 1.000
+  shape 1: vowel range 0.000 .. 1.000
+  shape 2: vowel range 0.000 .. 1.000
+  shape 3: vowel range 0.000 .. 1.000
+  shape 4: vowel range 0.000 .. 1.000
+
+[9] post filter, output gain, limiter
+  LP 1 kHz: 300 Hz -0.04 dB, 1 kHz -3.01 dB, 8 kHz -37.80 dB
+  HP 1 kHz: 200 Hz -27.99 dB, 8 kHz -0.00 dB
+  output +6 dB: +6.00 dB
+  limiter on, +12 dB gain into 3.0 peak: output peak 1.0000
+  limiter below knee (0.85 peak, after the 80 ms filter settle): max diff vs limiter off 0.0e+00
+
+[10] block-size independence (bit-exact)
+  sr=44100 os=0 : worst difference over 5 block patterns 0.0e+00
+  sr=44100 os=1 : worst difference over 5 block patterns 0.0e+00
+  sr=44100 os=2 : worst difference over 5 block patterns 0.0e+00
+  sr=48000 os=0 : worst difference over 5 block patterns 0.0e+00
+  sr=48000 os=1 : worst difference over 5 block patterns 0.0e+00
+  sr=48000 os=2 : worst difference over 5 block patterns 0.0e+00
+  sr=96000 os=0 : worst difference over 5 block patterns 0.0e+00
+  sr=96000 os=1 : worst difference over 5 block patterns 0.0e+00
+  sr=96000 os=2 : worst difference over 5 block patterns 0.0e+00
+
+[11] NaN / inf / extreme input and random-parameter stress
+  NaN/inf/1e30 injected: finite=1  peak 1.000
+  2400 random-parameter blocks at 4 sample rates: finite=1, max |out| 1.0000
+
+[12] real-time safety
+  400 blocks incl. oversampling / shaper switches: 0 heap allocations in process()/setParams()
+  CPU (this box, -O2, stereo, 4x oversampling, 48 kHz): 45.6 x real time (2.19 % of one core)
+
+[13] click-free section toggles and mode switches
+  DRIVE off                : max sample step 0.0224  (steady-state max 0.0209)
+  FORMANT off              : max sample step 0.0321  (steady-state max 0.0321)
+  POST off                 : max sample step 0.0209  (steady-state max 0.0209)
+  sub MONO off             : max sample step 0.0209  (steady-state max 0.0209)
+  LIMITER off              : max sample step 0.0209  (steady-state max 0.0209)
+  shaper type tanh->fold   : max sample step 0.0220  (steady-state max 0.0209)
+  oversampling 2x->4x      : max sample step 0.0266  (steady-state max 0.0209)
+  oversampling 4x->off     : max sample step 0.0293  (steady-state max 0.0209)
+  post LP->HP              : max sample step 0.0208  (steady-state max 0.0209)
+
+[14] channel counts and sample rates
+  22.05 / 44.1 / 88.2 / 192 kHz, mono + stereo: finite and non-silent
+
+RESULT: 112 checks passed, 0 failed
