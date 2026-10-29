@@ -19,7 +19,13 @@ cp -R "$A/VST3/CMPLXTY Growl.vst3" "$ROOT/Library/Audio/Plug-Ins/VST3/"
 cp -R "$A/CLAP/CMPLXTY Growl.clap" "$ROOT/Library/Audio/Plug-Ins/CLAP/"
 if [ -n "${DEV_ID_APP:-}" ]; then
   for p in "$ROOT"/Library/Audio/Plug-Ins/*/*; do codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$p"; done
+else
+  # No Apple certificate: still seal each bundle with an ad-hoc signature ("-"). The compiler only signs the main binary; this also seals
+  # Info.plist + Resources so the bundle is a valid signed unit (Apple Silicon hosts refuse code with a missing/broken signature).
+  # It does NOT remove the Gatekeeper warning on the downloaded .pkg: only Developer ID signing + notarization does.
+  for p in "$ROOT"/Library/Audio/Plug-Ins/*/*; do codesign --force --deep --timestamp=none --sign - "$p"; done
 fi
+for p in "$ROOT"/Library/Audio/Plug-Ins/*/*; do codesign --verify --deep --strict --verbose=2 "$p"; done
 lipo -archs "$ROOT/Library/Audio/Plug-Ins/VST3/CMPLXTY Growl.vst3/Contents/MacOS/CMPLXTY Growl"
 mkdir -p dist
 OUT=dist/CMPLXTY-Growl-Setup-$VERSION-mac.pkg
