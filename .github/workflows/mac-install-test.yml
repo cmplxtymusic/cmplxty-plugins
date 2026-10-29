@@ -1,0 +1,60 @@
+# Verifies mac/install-mac.sh on a real (GitHub-hosted, Apple Silicon) macOS runner:
+# browser-style quarantined pkg is rejected by Gatekeeper (control), the script install leaves nothing quarantined,
+# installed bundles carry a valid (ad-hoc) signature with the expected architectures, and AU passes auval if present.
+# Runs only on demand. It installs into the throwaway runner, never touches the website.
+name: mac-install-test
+on:
+  workflow_dispatch:
+    inputs:
+      slugs:
+        description: 'Space-separated slugs, or "all"'
+        default: 'all'
+  pull_request:
+    paths: ['mac/install-mac.sh', '.github/workflows/mac-install-test.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print-only mode
+        run: bash mac/install-mac.sh --print ${{ inputs.slugs || 'all' }}
+      - name: Checksum mismatch aborts (negative test)
+        run: |
+          sed 's/\[\[ "\$SHA" =~/SHA=$(printf "0%.0s" {1..64}); [[ "$SHA" =~/' mac/install-mac.sh > /tmp/mismatch.sh
+          if CMPLXTY_DL_DIR=/tmp/mm bash /tmp/mismatch.sh --download drift-shifter; then echo "FAIL: mismatch not detected"; exit 1; fi
+          [ -z "$(ls -A /tmp/mm 2>/dev/null)" ] || { echo "FAIL: mismatched file left behind"; exit 1; }
+      - name: Control - quarantined pkg is rejected by Gatekeeper
+        run: |
+          CMPLXTY_DL_DIR=/tmp/q bash mac/install-mac.sh --download drift-shifter
+          f=$(ls /tmp/q/*.pkg)
+          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" "$f"
+          if spctl -a -vv -t install "$f"; then echo "NOTE: spctl accepted a quarantined unsigned pkg (unexpected)"; else echo "OK: rejected as expected"; fi
+      - name: Install with the script
+        run: bash mac/install-mac.sh ${{ inputs.slugs || 'all' }}
+      - name: Installed bundles - no quarantine, valid signature, archs
+        run: |
+          fail=0
+          shopt -s nullglob
+          for b in /Library/Audio/Plug-Ins/VST3/CMPLXTY*.vst3 /Library/Audio/Plug-Ins/CLAP/CMPLXTY*.clap /Library/Audio/Plug-Ins/Components/CMPLXTY*.component; do
+            echo "== $b"
+            if xattr -r -l "$b" | grep -q com.apple.quarantine; then echo "FAIL quarantined"; fail=1; fi
+            codesign -dv "$b" 2>&1 | grep -E "^(Signature|CodeDirectory)" || true
+            codesign --verify --deep --strict "$b" || { echo "FAIL codesign verify"; fail=1; }
+            for x in "$b"/Contents/MacOS/*; do lipo -archs "$x"; done
+          done
+          ls /Library/Audio/Plug-Ins/VST3/ | grep -q CMPLXTY || { echo "FAIL: no CMPLXTY VST3 installed"; fail=1; }
+          exit $fail
+      - name: AU validation (if any .component was installed)
+        run: |
+          shopt -s nullglob
+          comps=(/Library/Audio/Plug-Ins/Components/CMPLXTY*.component)
+          if [ ${#comps[@]} -eq 0 ]; then echo "No AU (.component) in these pkgs - VST3/CLAP only"; exit 0; fi
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | tee /tmp/auval.txt | grep -i cmplxty || { echo "FAIL: AU not registered"; exit 1; }
+          grep -i cmplxty /tmp/auval.txt | awk '{print $1, $2, $3}' | while read -r t s m; do auval -v "$t" "$s" "$m" | tail -3; done

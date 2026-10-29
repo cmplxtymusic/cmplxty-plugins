@@ -7,7 +7,7 @@ Our Mac downloads are not yet signed with an Apple Developer ID (that costs $99 
 Open Terminal (Spotlight > Terminal) and paste ONE line:
 
     curl -fsSL https://cmplxty.music/install-mac.sh | bash -s glitch-crusher
-    (use growl-saturator or yoink instead of glitch-crusher for the others)
+    (replace glitch-crusher with the plugin name from its page address, e.g. granular or neon-fx; "all" installs every plugin. Add --print first to see exactly what it would download.)
 
 Files fetched by curl are not flagged by Gatekeeper. The plugins ask for your Mac password (installs to /Library/Audio/Plug-Ins).
 
