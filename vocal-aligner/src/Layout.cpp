@@ -191,8 +191,11 @@ private:
         chooser = std::make_unique<juce::FileChooser> (w == VocalAlignerProcessor::Which::guide ? "Load the guide vocal" : "Load the dub vocal",
                                                        juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
         juce::Component::SafePointer<TakeDisplay> safe (this);
+        hostkeys::rememberForDialog (*this);   // which host control had the keyboard before the dialog
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, w] (const juce::FileChooser& fc)
         {
+            if (safe != nullptr)   // picked or cancelled: Space goes to the host again once the dialog has gone
+                juce::Timer::callAfterDelay (60, [sp = juce::Component::SafePointer<juce::Component> (safe.getComponent())] { if (sp != nullptr) hostkeys::restoreAfterDialog (*sp); });
             if (safe == nullptr || fc.getResult() == juce::File()) return;
             safe->note = safe->proc.loadFile (w, fc.getResult());
             safe->refresh();

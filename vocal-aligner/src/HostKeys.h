@@ -73,9 +73,37 @@ namespace vaui { namespace hostkeys
         SetFocus (target);
         return true;
     }
+    // Just before opening a native dialog: keep the host control that has the keyboard (the periodic remember() may see other windows while it is open)
+    inline void rememberForDialog (juce::Component& c)
+    {
+        if (auto* ed = editorOf (c))
+        {
+            remember (*ed);
+            ed->getProperties().set ("dialogFocus", ed->getProperties().getWithDefault ("hostFocus", (juce::int64) 0));
+        }
+    }
+
+    // After a native dialog we opened (file chooser) closes, Windows gives the focus to the host's top-level window, not the control that
+    // had it. Put it back on the remembered host control, when the focus is on that top-level window, on nothing, or still with us.
+    inline void restoreAfterDialog (juce::Component& c)
+    {
+        auto* ed = editorOf (c);
+        if (ed == nullptr) return;
+        const HWND mine = nativeOf (*ed), f = GetFocus();
+        if (mine == nullptr) return;
+        const HWND root = GetAncestor (mine, GA_ROOT);
+        if (! (f == nullptr || f == root || f == mine || IsChild (mine, f))) return;   // the user already moved on to some other window
+        const HWND target = (HWND) (intptr_t) (juce::int64) ed->getProperties().getWithDefault ("dialogFocus", (juce::int64) 0);
+        if (target == nullptr || ! IsWindow (target) || target == mine || IsChild (mine, target) || ! IsWindowVisible (target)) return;
+        if (GetWindowThreadProcessId (target, nullptr) != GetCurrentThreadId()) return;
+        juce::Component::unfocusAllComponents();
+        SetFocus (target);
+    }
    #else
     inline void remember (juce::Component&) {}
     inline bool release (juce::Component& c) { if (auto* ed = editorOf (c)) { ed->giveAwayKeyboardFocus(); } return false; }
+    inline void rememberForDialog (juce::Component&) {}
+    inline void restoreAfterDialog (juce::Component& c) { release (c); }
    #endif
 
     // after the current message (e.g. after a text editor has finished closing)
