@@ -37,6 +37,9 @@ clap_juce_extensions_plugin(TARGET Drift
     CLAP_ID "com.cmplxty.drift-shifter"
     CLAP_FEATURES audio-effect frequency-shifter stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(Drift_CLAP "CMPLXTY Drift" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(DFAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(DFAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

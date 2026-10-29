@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET DarkReverb
     CLAP_ID "com.cmplxty.dark-reverb"
     CLAP_FEATURES audio-effect reverb mono stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(DarkReverb_CLAP "CMPLXTY Dark Reverb" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(DRAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(DRAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

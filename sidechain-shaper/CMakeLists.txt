@@ -38,6 +38,9 @@ clap_juce_extensions_plugin(TARGET SidechainShaper
     CLAP_ID "com.cmplxty.sidechain-shaper"
     CLAP_FEATURES audio-effect tremolo gate mono stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(SidechainShaper_CLAP "CMPLXTY Sidechain Shaper" "CMPLXTY")
+
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(SCAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(SCAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
