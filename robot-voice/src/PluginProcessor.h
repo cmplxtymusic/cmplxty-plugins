@@ -1,5 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "PresetKit.h"
+#include "UpdateCheck.h"
 #include "RobotDSP.h"
 
 // CMPLXTY Robot Voice: hard pitch snap to a scale, a channel vocoder whose carrier follows the snapped pitch (or MIDI notes),
@@ -34,6 +36,7 @@ public:
 
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
+    pk::PresetManager presets { apvts, &undoManager, "CMPLXTY Robot Voice", rv::upd::dataDir(), RV_VERSION_STRING };
     std::atomic<int> uiWidth { 0 }, uiHeight { 0 };
 
     // display

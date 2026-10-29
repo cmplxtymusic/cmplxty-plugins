@@ -1,6 +1,7 @@
 // Renders the real RobotVoiceEditor to a PNG, and runs the processor-level tests.
 // usage: RobotVoiceScreenshot out.png [banner|menu|big|empty|keys|params|proc]
 #include "PluginEditor.h"
+#include "PresetKitTest.h"
 #include <random>
 #include <cmath>
 
@@ -99,7 +100,7 @@ int main (int argc, char** argv)
     { rv::upd::Settings s; s.enabled = true; s.save();
       auto* o = new juce::DynamicObject(); o->setProperty ("checked", (juce::int64) (juce::Time::currentTimeMillis() / 1000)); o->setProperty ("ok", false);
       rv::upd::writeJson (rv::upd::dataDir().getChildFile ("update-cache.json"), juce::var (o)); }
-    if (mode == "proc") return procTests();
+    if (mode == "proc") return procTests() + pk::test::procTests<RobotVoiceProcessor> ([] (RobotVoiceProcessor& q) -> pk::PresetManager& { return q.presets; }, rv::upd::dataDir().getChildFile ("Presets"));
     RobotVoiceProcessor proc;
     proc.setPlayConfigDetails (2, 2, 48000.0, 512); proc.prepareToPlay (48000.0, 512);
     if (mode == "params")
@@ -114,6 +115,7 @@ int main (int argc, char** argv)
         std::printf ("%d params, %d not automatable\n", proc.getParameters().size(), bad);
         return bad;
     }
+    if (mode.isEmpty() || mode == "presets") proc.presets.loadFactory (1);
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* e = dynamic_cast<RobotVoiceEditor*> (ed.get());
     ed->setVisible (true);
@@ -123,10 +125,12 @@ int main (int argc, char** argv)
     {
         auto r = e->getPanel().auditKeyboard(); std::printf ("%s", r.toRawUTF8());
         auto m = e->getPanel().auditMenus();    std::printf ("%s", m.toRawUTF8());
-        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK")) ? 0 : 1;
+        auto pa = pk::test::auditPresets (e->getPanel(), e->getPanel().getPresetBar(), e->getPanel().getPresetMenu(), proc.presets); std::printf ("%s", pa.toRawUTF8());
+        return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK") && pa.contains ("PRESET AUDIT OK")) ? 0 : 1;
     }
     if (mode != "empty") rvui::demoDisplay (e->getPanel().display());
     if (mode == "menu") e->getPanel().demoKnobMenu();
+    if (mode == "presets") e->getPanel().getPresetBar().openMenu();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     juce::File f (juce::File::getCurrentWorkingDirectory().getChildFile (out));
