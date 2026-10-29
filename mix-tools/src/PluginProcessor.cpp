@@ -8,7 +8,7 @@ const mt::PDef kParams[] = {
     { "order",    "Order",          'c', 0, 1, 1, 1, 0.0f, "", "Widen > Shape > Limit|Shape > Widen > Limit" },
     { "wOn",      "Widener On",     'b', 0, 1, 1, 1, 1.0f, "" },
     { "width",    "Width",          'f', 0.0f, 2.0f, 0.001f, 1.0f, 1.0f, "%" },
-    { "monoBass", "Mono Bass",      'f', 20.0f, 500.0f, 1.0f, 0.5f, 20.0f, "Hz" },
+    { "monoBass", "Mono Bass",      'f', 20.0f, 500.0f, 1.0f, 0.5f, 20.0f, "Hz-off" },
     { "tOn",      "Shaper On",      'b', 0, 1, 1, 1, 1.0f, "" },
     { "attack",   "Attack",         'f', -1.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
     { "sustain",  "Sustain",        'f', -1.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },

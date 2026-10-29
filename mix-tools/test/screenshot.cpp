@@ -40,6 +40,8 @@ int procTests()
         MixToolsProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         check (proc.getTotalNumInputChannels() == 2 && ! proc.acceptsMidi(), "stereo in/out, no MIDI");
         check (proc.getLatencySamples() == proc.dspEngine().latency() && proc.getLatencySamples() > 0, "lookahead latency reported to the host");
+        { auto* mb = proc.apvts.getParameter ("monoBass");
+          check (mb->getText (0.0f, 20) == "Off" && mb->getText (1.0f, 20).contains ("500") && mb->getValueForText ("off") == 0.0f, "Mono Bass shows / accepts 'Off' at minimum"); }
         check (proc.getParameters().size() == 13 && v (proc, "ceiling") == -1.0f && v (proc, "width") == 1.0f, "13 parameters, defaults (ceiling -1 dBTP, width 100 %)");
         set (proc, "drive", 18.0f);
         auto y = runProc (proc, x, 2); float pk = 0; for (size_t i = 4800; i < y.size(); ++i) pk = std::max (pk, std::fabs (y[i]));

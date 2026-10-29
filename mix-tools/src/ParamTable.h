@@ -50,10 +50,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout (const PDef (&def
         else if (d.type == 'c') p.push_back (std::make_unique<AudioParameterChoice> (pid, d.name, StringArray::fromTokens (d.choices, "|", ""), (int) d.def));
         else
         {
-            const String unit (d.unit);
+            // unit "Hz-off": a frequency whose minimum means the feature is off (shown and typed as "Off")
+            const bool offAtMin = String (d.unit) == "Hz-off";
+            const String unit (offAtMin ? "Hz" : d.unit);
+            const float lo = d.lo;
             auto a = AudioParameterFloatAttributes().withLabel (unit)
-                         .withStringFromValueFunction ([unit] (float v, int) { return ptab::fmt (v, unit); })
-                         .withValueFromStringFunction ([unit] (const String& s) { return ptab::parse (s, unit); });
+                         .withStringFromValueFunction ([unit, offAtMin, lo] (float v, int) { return offAtMin && v <= lo + 0.5f ? String ("Off") : ptab::fmt (v, unit); })
+                         .withValueFromStringFunction ([unit, offAtMin, lo] (const String& s) { return offAtMin && s.trim().equalsIgnoreCase ("off") ? lo : ptab::parse (s, unit); });
             p.push_back (std::make_unique<AudioParameterFloat> (pid, d.name, NormalisableRange<float> (d.lo, d.hi, d.step, d.skew), d.def, a));
         }
     }
