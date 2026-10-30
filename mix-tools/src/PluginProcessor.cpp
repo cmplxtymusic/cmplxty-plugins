@@ -18,6 +18,7 @@ const mt::PDef kParams[] = {
     { "ceiling",  "Ceiling",        'f', -12.0f, 0.0f, 0.1f, 1.0f, -1.0f, "dB" },
     { "release",  "Release",        'f', 1.0f, 1000.0f, 0.1f, 0.4f, 80.0f, "ms" },
     { "gain",     "Output",         'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",      "Bypass",     'b', 0, 1, 1, 1, 0.0f, "" },
 };
 } // namespace
 
@@ -28,6 +29,8 @@ MixToolsProcessor::MixToolsProcessor()
       apvts (*this, &undoManager, "STATE", mt::makeLayout (kParams)),
       presets (apvts, &undoManager, "Mix Tools")
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pOrder = g ("order"); pWOn = g ("wOn"); pWidth = g ("width"); pMono = g ("monoBass"); pTOn = g ("tOn"); pAtt = g ("attack"); pSus = g ("sustain");
     pSpeed = g ("speed"); pLOn = g ("lOn"); pDrive = g ("drive"); pCeil = g ("ceiling"); pRel = g ("release"); pGain = g ("gain");
@@ -49,11 +52,12 @@ mt::dsp::Params MixToolsProcessor::currentParams() const
     return p;
 }
 
-void MixToolsProcessor::prepareToPlay (double sr, int)
+void MixToolsProcessor::prepareToPlay (double sr, int maxBlock)
 {
     engine.setParams (currentParams());
     engine.prepare (sr > 0 ? sr : 48000.0, juce::jmax (1, getTotalNumOutputChannels()));
     setLatencySamples (engine.latency());
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), engine.latency());
 }
 
 void MixToolsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -61,12 +65,14 @@ void MixToolsProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
     midi.clear();
     engine.setParams (currentParams());
     const int nch = juce::jmin (2, buffer.getNumChannels());
     if (nch <= 0) return;
     engine.process (buffer.getArrayOfWritePointers(), n);
     juce::ignoreUnused (nch);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 void MixToolsProcessor::getStateInformation (juce::MemoryBlock& dest)
