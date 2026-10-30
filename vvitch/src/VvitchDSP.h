@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "Oversampler.h"
 
 namespace vv::dsp
 {
@@ -229,8 +230,25 @@ public:
     }
 
 private:
+    struct DriveOS : cmx::Oversampler { DriveOS() { setFactor (4); } };
+    // tanh drive, 4x polyphase-IIR oversampled with first-order antiderivative anti-aliasing (log-cosh): high driven notes no longer fold
+    // harmonics back as inharmonic fizz. Zero reported latency (minimum-phase IIR halfbands, a fraction of a sample of group delay).
+    template <class V>
+    static float driveAA (V& v, float in, float drv)
+    {
+        float hi[16]; v.os.up (in, hi);
+        for (int k = 0; k < v.os.factor(); ++k)
+        {
+            const double u = (double) hi[k] * drv, d = u - v.dxp;
+            const double y = std::abs (d) < 1.0e-6 ? std::tanh (0.5 * (u + v.dxp)) : (lcosh (u) - lcosh (v.dxp)) / d;
+            v.dxp = u; hi[k] = (float) y;
+        }
+        return v.os.down (hi);
+    }
+    static double lcosh (double u) { const double a = std::abs (u); return a + std::log1p (std::exp (-2.0 * a)) - 0.6931471805599453; }
     struct Voice
     {
+        DriveOS os; double dxp = 0;
         int note = -1; float vel = 1, pitch = 60, target = 60, t = 0; bool gate = false, held = false; uint64_t age = 0;
         Env amp, fenv; std::array<double, kMaxUni> ph1 {}, ph2 {}; double pwmPh = 0;
         std::array<double, kMaxUni> inc1 {}, inc2 {}; std::array<float, kMaxUni> gl {}, gr {};
@@ -407,7 +425,7 @@ private:
                 side *= (1.0f - 0.5f * vox);
             }
             // drive + filter on the mid; the unison side signal is scaled down with the cutoff (the stereo spread follows the filter)
-            const float x = std::tanh (m * drv) * drvN;
+            const float x = driveAA (v, m, drv) * drvN;
             float lp, bp, hp; v.f1.tick (x, lp, bp, hp);
             float y;
             switch (P.fType)
