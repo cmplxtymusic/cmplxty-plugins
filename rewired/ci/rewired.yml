@@ -48,6 +48,28 @@ jobs:
         with: { name: rewired-linux, path: out/linux }
       - uses: actions/upload-artifact@v4
         with: { name: rewired-moduleinfo, path: out/moduleinfo }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/cache@v4
+        id: spleeter
+        with:
+          path: rewired/build/models/spleeter4.onnx
+          key: rewired-spleeter4-onnx-v1-${{ hashFiles('rewired/tools/spleeter_to_onnx.py') }}
+      - name: Convert Spleeter 4stems to ONNX (once, on Linux)
+        if: steps.spleeter.outputs.cache-hit != 'true'
+        run: |
+          pip install --quiet 'tensorflow-cpu==2.17.1' 'onnx==1.16.2' 'numpy>=1.26.4,<2.1'
+          ./scripts/fetch-models.sh
+      - name: Checksum spleeter4.onnx
+        run: |
+          test -s build/models/spleeter4.onnx
+          cd build/models && sha256sum spleeter4.onnx | tee spleeter4.onnx.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rewired-spleeter-onnx
+          path: |
+            rewired/build/models/spleeter4.onnx
+            rewired/build/models/spleeter4.onnx.sha256
 
   windows:
     # cross-compiled on Linux with clang-cl + xwin (static /MT CRT, no Visual C++ redistributable needed), packed with NSIS
@@ -76,19 +98,15 @@ jobs:
           tar -xzf xwin.tar.gz --strip-components=1 -C ~/.local/bin
           ~/.local/bin/xwin --accept-license --arch x86_64 --variant desktop splat --output ~/.local/xwin-sdk
       - run: ./scripts/fetch-deps.sh
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - uses: actions/cache@v4
-        with: { path: rewired/build/models, key: "rewired-models-${{ hashFiles('rewired/scripts/fetch-models.sh', 'rewired/tools/spleeter_to_onnx.py') }}" }
-      - name: Models + ONNX Runtime (Spleeter 4stems MIT -> ONNX, basic-pitch Apache-2.0, ORT 1.23.2 MIT)
-        run: |
-          [ -f build/models/spleeter4.onnx ] || pip install --quiet 'tensorflow-cpu==2.17.*' onnx numpy
-          ./scripts/fetch-models.sh
+      - uses: actions/download-artifact@v4
+        with: { name: rewired-spleeter-onnx, path: rewired/build/models }
+      - name: Models + ONNX Runtime (reuse the Linux Spleeter ONNX; basic-pitch Apache-2.0, ORT 1.23.2 MIT)
+        run: ./scripts/fetch-models.sh
       - run: RW_MODELS=build/models RW_ORT_WIN=build/models/ort/win-x64/onnxruntime.dll ./scripts/build-windows-xwin.sh
       - run: ./scripts/build-installer.sh
       - name: Check ProductName / ProductVersion metadata (SignPath)
         run: |
-          pip install --quiet pefile
+          python3 -m pip install --quiet pefile
           S=dist/stage-windows-x64
           python3 ../tools/check-win-metadata.py . "$S/CMPLXTY Rewired.vst3/Contents/x86_64-win/CMPLXTY Rewired.vst3" "$S/CMPLXTY Rewired.clap" "$S/CMPLXTY Rewired.exe" dist/*-win.exe
       - name: Checksum
@@ -101,19 +119,16 @@ jobs:
             rewired/dist/SHA256SUMS
 
   macos:
+    needs: linux
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - run: brew install cmake ninja
       - run: ./scripts/fetch-deps.sh
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - uses: actions/cache@v4
-        with: { path: rewired/build/models, key: "rewired-models-${{ hashFiles('rewired/scripts/fetch-models.sh', 'rewired/tools/spleeter_to_onnx.py') }}" }
-      - name: Models + ONNX Runtime (Spleeter 4stems MIT -> ONNX, basic-pitch Apache-2.0, ORT 1.23.2 MIT)
-        run: |
-          [ -f build/models/spleeter4.onnx ] || pip install --quiet 'tensorflow-cpu==2.17.*' onnx numpy
-          ./scripts/fetch-models.sh
+      - uses: actions/download-artifact@v4
+        with: { name: rewired-spleeter-onnx, path: rewired/build/models }
+      - name: Models + ONNX Runtime (reuse the Linux Spleeter ONNX; basic-pitch Apache-2.0, ORT 1.23.2 MIT)
+        run: ./scripts/fetch-models.sh
       - name: Universal VST3 + CLAP + app + models -> .pkg
         run: ./scripts/build-macos-pkg.sh
       - name: Checksum
