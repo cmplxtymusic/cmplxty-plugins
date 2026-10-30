@@ -125,6 +125,13 @@ public:
     }
 
     // ch[0..nch-1] in place
+    // output safety: transparent below -4.4 dBFS, then a tanh knee that never passes 0.85 (-1.4 dBFS), so even decay 30 / size 1 /
+    // mix 1 resonances keep the true peak under -0.3 dBFS
+    static float safety (float x) noexcept
+    {
+        const float a = std::fabs (x);
+        return a <= 0.6f ? x : std::copysign (0.6f + 0.25f * std::tanh ((a - 0.6f) / 0.25f), x);
+    }
     void process (float* const* ch, int n) noexcept
     {
         if (dirty) update();
@@ -203,10 +210,10 @@ public:
             pkWet = std::max (pkWet, std::max (std::fabs (wl), std::fabs (wr)));
             if (nch > 1)
             {
-                ch[0][s] = (in[0] * (1.0f - mixS) + wl * mixS) * gainS;
-                ch[1][s] = (in[1] * (1.0f - mixS) + wr * mixS) * gainS;
+                ch[0][s] = safety ((in[0] * (1.0f - mixS) + wl * mixS) * gainS);
+                ch[1][s] = safety ((in[1] * (1.0f - mixS) + wr * mixS) * gainS);
             }
-            else ch[0][s] = (in[0] * (1.0f - mixS) + 0.5f * (wl + wr) * mixS) * gainS;
+            else ch[0][s] = safety ((in[0] * (1.0f - mixS) + 0.5f * (wl + wr) * mixS) * gainS);
         }
         inLevel.store (pkIn, std::memory_order_relaxed);
         wetLevel.store (pkWet, std::memory_order_relaxed);
