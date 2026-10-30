@@ -76,6 +76,7 @@ APVTS::ParameterLayout DriftProcessor::createLayout()
     toggle ("soloHigh", "Solo High", false);
     // display
     toggle ("eco", "Eco Mode", false);
+    p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "bypass", 1 }, "Bypass", false));
     return { p.begin(), p.end() };
 }
 
@@ -85,6 +86,8 @@ DriftProcessor::DriftProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", createLayout())
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     presets.keepIds = { "eco" };   // a display preference, not part of the sound
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     P = { g ("coarse"), g ("fine"), g ("shiftOn"), g ("spread"), g ("wide"), g ("mix"), g ("feedback"), g ("keyOn"), g ("keyAmt"),
@@ -99,8 +102,9 @@ bool DriftProcessor::isBusesLayoutSupported (const BusesLayout& l) const
     return out == l.getMainInputChannelSet();
 }
 
-void DriftProcessor::prepareToPlay (double sr, int)
+void DriftProcessor::prepareToPlay (double sr, int maxBlock)
 {
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), df::kLatency);
     engine.prepare (sr, juce::jmax (1, getMainBusNumOutputChannels()));
     heldNote.store (-1);
     setLatencySamples (df::kLatency);
@@ -112,6 +116,7 @@ void DriftProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const int nCh = juce::jmin (buffer.getNumChannels(), df::kMaxChannels);
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
 
     df::Params p;
     auto on = [] (std::atomic<float>* a) { return a->load() > 0.5f; };
@@ -145,6 +150,7 @@ void DriftProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     }
     renderTo (n);
     heldNote.store (engine.currentNote(), std::memory_order_relaxed);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 juce::AudioProcessorEditor* DriftProcessor::createEditor() { return new DriftEditor (*this); }
