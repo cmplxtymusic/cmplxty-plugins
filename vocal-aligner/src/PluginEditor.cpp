@@ -478,7 +478,7 @@ void Panel::showUpdateMenu()
 void Panel::resetAll()
 {
     for (auto* prm : proc.getParameters())
-        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && r->getParameterID() != "bypass")
         {
             r->beginChangeGesture(); r->setValueNotifyingHost (r->getDefaultValue()); r->endChangeGesture();
         }

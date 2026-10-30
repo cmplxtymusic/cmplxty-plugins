@@ -12,6 +12,7 @@ const va::PDef kParams[] = {
     { "autoAlign","Auto Align",    'b', 0, 1, 1, 1, 1.0f, "" },
     { "monitor",  "Monitor",       'c', 0, 2, 1, 1, 0.0f, "", "Aligned|Original|Guide" },
     { "gain",     "Output",        'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",  "Bypass",   'b', 0, 1, 1, 1, 0.0f, "" },
 };
 
 juce::File docsDir() { return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("CMPLXTY Vocal Aligner"); }
@@ -43,7 +44,8 @@ VocalAlignerProcessor::VocalAlignerProcessor()
                           .withInput  ("Guide (side-chain)", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, &undoManager, "STATE", va::makeLayout (kParams))
 {
-    presets.keepIds = { "monitor" };   // what you listen to is a workflow switch, not part of a preset
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds = { "monitor", "bypass" };   // what you listen to is a workflow switch, not part of a preset
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pTight = g ("tight"); pShift = g ("maxShift"); pPitchOn = g ("pitchOn"); pPitchAmt = g ("pitchAmt");
     pMonitor = g ("monitor"); pGain = g ("gain"); pAuto = g ("autoAlign");
@@ -69,8 +71,9 @@ bool VocalAlignerProcessor::isBusesLayoutSupported (const BusesLayout& l) const
     return true;
 }
 
-void VocalAlignerProcessor::prepareToPlay (double sr, int)
+void VocalAlignerProcessor::prepareToPlay (double sr, int maxBlock)
 {
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), 0);
     sampleRate = sr > 0.0 ? sr : 48000.0;
     { const juce::ScopedLock l (peakStore.lock); peakStore.bin = std::max (1, (int) std::lround (sampleRate / 100.0)); }
     gainSmooth = juce::Decibels::decibelsToGain (pGain->load());
@@ -92,6 +95,7 @@ void VocalAlignerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     auto main = getBusBuffer (buffer, true, 0);
     const int nCh = main.getNumChannels();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
     const bool sc = getBusCount (true) > 1 && getBus (true, 1)->isEnabled() && getBus (true, 1)->getNumberOfChannels() > 0;
     scConnected.store (sc, std::memory_order_relaxed);
 
@@ -160,6 +164,7 @@ void VocalAlignerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         gainSmooth += 0.002f * (target - gainSmooth);
         for (int c = 0; c < nCh; ++c) main.setSample (c, i, main.getSample (c, i) * gainSmooth);
     }
+    bypass.mix (buffer, bypassParam->get());
 }
 
 // ---------------------------------------------------------------------------------------------------- capture / align
