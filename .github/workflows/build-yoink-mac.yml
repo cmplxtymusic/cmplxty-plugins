@@ -8,10 +8,12 @@ name: Build Yoink for Mac
 on:
   workflow_dispatch:
   push:
-    tags: ['yoink-mac-v*']
+    tags: ['yoink-mac-v*', 'yoink-v*']
 
 jobs:
   build:
+    # The Mac disk image stays on yoink-mac-v* tags. yoink-v* is the Windows installer only.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'yoink-mac-v')
     runs-on: macos-latest   # Apple Silicon runner; the Intel half is cross-compiled
     timeout-minutes: 60
     defaults:
@@ -63,3 +65,76 @@ jobs:
             yoink/dist-mac/Yoink.dmg.sha256
           if-no-files-found: error
           retention-days: 30
+
+  ffmpeg:
+    # Minimal LGPL ffmpeg.exe from yoink/build-ffmpeg-min.sh (the binary build-win.sh expects).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'yoink-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: yoink
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW, nasm, make
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 nasm make pkg-config
+      - name: Build ffmpeg.exe
+        env:
+          W: ${{ runner.temp }}/ffbuild
+        run: |
+          mkdir -p build/tools
+          bash "$GITHUB_WORKSPACE/yoink/build-ffmpeg-min.sh"
+          cp "$W/ffmpeg-7.1.1/COPYING.LGPLv2.1" build/tools/ffmpeg-LICENSE.txt
+          test -s build/tools/ffmpeg.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yoink-ffmpeg-exe
+          path: |
+            yoink/build/tools/ffmpeg.exe
+            yoink/build/tools/ffmpeg-LICENSE.txt
+
+  windows:
+    # NSIS installer from electron-builder, same as yoink/build-win.sh. Runs on Windows so the
+    # uninstaller stub does not need Wine. onnxruntime-node is the Windows binary npm installs here.
+    needs: ffmpeg
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'yoink-v')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: yoink
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: yoink/package-lock.json
+      - uses: actions/download-artifact@v4
+        with: { name: yoink-ffmpeg-exe, path: yoink/build/tools }
+      - name: Install packages
+        run: npm ci
+      - name: yt-dlp and the Electron Windows binary
+        run: |
+          curl -fsSL -o build/tools/yt-dlp.exe "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+          mkdir -p build/electron-dist
+          curl -fsSL -o /tmp/electron.zip "https://github.com/electron/electron/releases/download/v45.0.0/electron-v45.0.0-win32-x64.zip"
+          unzip -q /tmp/electron.zip -d build/electron-dist
+          test -s build/tools/ffmpeg.exe
+          test -s build/electron-dist/electron.exe
+      - name: Stage ONNX Runtime, test, build Yoink-Setup.exe
+        run: |
+          node build/stage-ort.js
+          npm test
+          npx electron-builder --win nsis --x64
+      - name: Checksum
+        run: |
+          node -e "const c=require('crypto'),f=require('fs'); const b=f.readFileSync('dist/Yoink-Setup.exe'); console.log(c.createHash('sha256').update(b).digest('hex')+'  Yoink-Setup.exe')" | tee dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yoink-windows-installer
+          path: |
+            yoink/dist/Yoink-Setup.exe
+            yoink/dist/SHA256SUMS
+          if-no-files-found: error

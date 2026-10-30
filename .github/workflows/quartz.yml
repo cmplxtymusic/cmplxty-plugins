@@ -1,4 +1,5 @@
-# Quartz - macOS CI (universal VST3, ad-hoc signed .pkg); project lives in quartz/. Windows is still built locally (MinGW, see quartz/BUILD.txt).
+# Quartz CI. macOS: universal VST3 .pkg. Windows: llvm-mingw VST3, NSIS setup exe, and a VST3 zip.
+# Quartz has no CLAP target. Unsigned (no Apple Developer ID / no Windows signing).
 name: quartz
 on:
   workflow_dispatch:
@@ -9,6 +10,29 @@ defaults:
     shell: bash
     working-directory: quartz
 jobs:
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build cmake g++ nsis zip git pkg-config
+      - name: llvm-mingw (ucrt)
+        run: |
+          mkdir -p "$HOME/.local" /tmp/dl && cd /tmp/dl
+          curl -fsSL -o mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          tar -xf mingw.tar.xz -C "$HOME/.local"
+          echo "LLVM_MINGW_ROOT=$HOME/.local/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64" >> "$GITHUB_ENV"
+      - name: Windows VST3 -> setup exe + zip
+        run: ./scripts/build-windows-mingw.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quartz-windows
+          path: |
+            quartz/dist/Quartz-Setup-*.exe
+            quartz/dist/Quartz-*-VST3.zip
+            quartz/dist/SHA256SUMS
+          if-no-files-found: error
+
   macos:
     runs-on: macos-15
     steps:
