@@ -93,7 +93,7 @@ jobs:
             neon-fx/dist/SHA256SUMS
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: brew install cmake ninja
