@@ -78,6 +78,7 @@ APVTS::ParameterLayout GrowlProcessor::createLayout()
     flt ("mix", "Mix", 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, percent());
     flt ("outGain", "Output Gain", -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, A().withLabel ("dB"));
     toggle ("limiter", "Safety Limiter", true);
+    toggle ("bypass", "Bypass", false);
     return { p.begin(), p.end() };
 }
 
@@ -91,6 +92,8 @@ GrowlProcessor::GrowlProcessor()
     P = { g ("inGain"), g ("crossover"), g ("subLevel"), g ("subMono"), g ("driveOn"), g ("drive"), g ("satType"), g ("bias"), g ("oversampling"),
           g ("formantOn"), g ("vowel"), g ("shift"), g ("focus"), g ("formantAmount"), g ("lfoRate"), g ("lfoShape"), g ("lfoDepth"),
           g ("postOn"), g ("postType"), g ("postCut"), g ("postRes"), g ("mix"), g ("outGain"), g ("limiter") };
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");
     setLatencySamples (gw::kLatency);
 }
 
@@ -105,6 +108,7 @@ void GrowlProcessor::prepareToPlay (double sr, int block)
 {
     engine.prepare (sr, block, juce::jmax (1, getMainBusNumOutputChannels()));
     setLatencySamples (gw::kLatency);
+    bypass.prepare (sr, block, juce::jmax (1, getMainBusNumOutputChannels()), gw::kLatency);
     firstBlock = true;
 }
 
@@ -125,7 +129,7 @@ void GrowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     p.postOn = on (P.postOn); p.postType = (int) P.postType->load(); p.postCutHz = P.postCut->load(); p.postRes = P.postRes->load();
     p.mix = P.mix->load(); p.outGainDb = P.outGain->load(); p.limiter = on (P.limiter);
     engine.setParams (p);
-    if (firstBlock) { engine.snapSmoothers(); firstBlock = false; }
+    if (firstBlock) { engine.snapSmoothers(); bypass.snap (bypassParam->get()); firstBlock = false; }
 
     gw::Transport tp;
     if (auto* ph = getPlayHead())
@@ -136,7 +140,9 @@ void GrowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 if (auto ppq = pos->getPpqPosition()) { tp.ppq = *ppq; tp.hasPpq = true; }
         }
 
+    bypass.pushDry (buffer);
     engine.process (buffer.getArrayOfWritePointers(), nCh, n, tp);
+    bypass.mix (buffer, bypassParam->get());
     vowelDisplay.store (engine.currentVowel(), std::memory_order_relaxed);
 }
 
@@ -152,6 +158,7 @@ void GrowlProcessor::getStateInformation (juce::MemoryBlock& dest)
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
+    xml.setAttribute ("uiW", uiWidth.load()); xml.setAttribute ("uiH", uiHeight.load());
     copyXmlToBinary (xml, dest);
 }
 
@@ -161,6 +168,7 @@ void GrowlProcessor::setStateInformation (const void* data, int size)
         if (xml->hasTagName ("GrowlState"))
         {
             presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
+            uiWidth.store (xml->getIntAttribute ("uiW", 840)); uiHeight.store (xml->getIntAttribute ("uiH", 540));
             for (auto* prm : getParameters())
                 if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
                     if (xml->hasAttribute (r->paramID))
