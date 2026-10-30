@@ -239,7 +239,7 @@ void GlitchCrusherEditor::addKnob (KnobBox& k, const char* id, const char* name)
     auto* prm = proc.apvts.getParameter (id);
     k.slider.setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
     paramOf.push_back ({ &k.slider, id });
-    k.slider.onContextMenu = [this] (gcui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (kn, getLocalPoint (nullptr, screenPos)); };
+    k.slider.onContextMenu = [this] (gcui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (kn, toBase (getLocalPoint (nullptr, screenPos))); };
 }
 
 void GlitchCrusherEditor::addCombo (Combo& c, const char* id, const char* name)
@@ -320,7 +320,11 @@ GlitchCrusherEditor::GlitchCrusherEditor (GlitchCrusherProcessor& p) : AudioProc
     gcui::hostkeys::noKeyboardFocus (*this, &popup);
     popup.setWantsKeyboardFocus (false);
     startTimerHz (10);                        // remembers the host's focused window; safety net, see timerCallback
-    setSize (720, 384);
+    // resizable, fixed aspect ratio (host frame or the corner handle); the size is kept with the session
+    setResizable (true, true);
+    getConstrainer()->setFixedAspectRatio ((double) kBaseW / (double) kBaseH);
+    setResizeLimits (kBaseW * 7 / 10, kBaseH * 7 / 10, kBaseW * 3, kBaseH * 3);
+    setSize (juce::jlimit (kBaseW * 7 / 10, kBaseW * 3, proc.uiWidth.load()), juce::jlimit (kBaseH * 7 / 10, kBaseH * 3, proc.uiHeight.load()));
     // update check: after the editor is up, on a background thread, at most once per 24 h, silent on failure
     juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<GlitchCrusherEditor> (this)] { if (sp != nullptr) sp->startUpdateCheck(); });
 }
@@ -384,7 +388,7 @@ void GlitchCrusherEditor::showUpdateMenu()
 void GlitchCrusherEditor::resetAll()
 {
     for (auto* prm : proc.getParameters())
-        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && r->getParameterID() != "bypass")
         {
             r->beginChangeGesture(); r->setValueNotifyingHost (r->getDefaultValue()); r->endChangeGesture();
         }
@@ -459,9 +463,9 @@ void GlitchCrusherEditor::mouseDown (const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
     {
         if (auto* c = e.eventComponent; c != nullptr && c != this && paramIdOf (c).isNotEmpty())
-        { showParamMenu (*c, getLocalPoint (nullptr, e.getScreenPosition())); return; }
+        { showParamMenu (*c, toBase (getLocalPoint (nullptr, e.getScreenPosition()))); return; }
     }
-    else if (updateLinkBounds().contains (e.getPosition())) showUpdateMenu();
+    else if (updateLinkBounds().contains (toBase (e.getPosition()))) showUpdateMenu();
 }
 
 // Walks every component: nothing except the open popup / a text editor may want keyboard focus; unhandled keys must not be consumed.
@@ -509,6 +513,7 @@ juce::String GlitchCrusherEditor::auditKeyboard()
 void GlitchCrusherEditor::paint (juce::Graphics& g)
 {
     g.fillAll (kBg);
+    g.addTransform (juce::AffineTransform::scale (uiScale()));   // drawn in base units
     g.setColour (kCyan);
     g.setFont (uiFont (22.0f, true));
     g.drawText ("CMPLXTY // GLITCH CRUSHER", 16, 8, 330, 30, juce::Justification::centredLeft);
@@ -536,7 +541,7 @@ void GlitchCrusherEditor::paint (juce::Graphics& g)
 
 void GlitchCrusherEditor::resized()
 {
-    auto full = getLocalBounds();
+    auto full = baseBounds();
     footerArea = full.removeFromBottom (kFooterH);
     auto area = full.reduced (12);
     area.removeFromTop (38);
@@ -579,10 +584,14 @@ void GlitchCrusherEditor::resized()
     for (auto [sec, area2] : { std::pair<Section*, juce::Rectangle<int>> { &crushSec, crushArea }, { &glitchSec, glitchArea }, { &filterSec, filterArea } })
         sec->power.setBounds (area2.getRight() - 50, area2.getY() + 4, 42, 16);
 
-    banner.setBounds (getWidth() - 12 - 392, 9, 392, 28);
-    presetBar.setBounds (getWidth() - 12 - 330, 10, 330, 26);
-    presetMenu.setBounds (getLocalBounds());
-    popup.setBounds (getLocalBounds());
+    banner.setBounds (kBaseW - 12 - 392, 9, 392, 28);
+    presetBar.setBounds (kBaseW - 12 - 330, 10, 330, 26);
+    presetMenu.setBounds (baseBounds());
+    popup.setBounds (baseBounds());
+    // resizable window: lay out in base units, then scale every top-level child by the same factor (fixed aspect ratio)
+    const auto sc = juce::AffineTransform::scale (uiScale());
+    for (auto* ch : getChildren()) ch->setTransform (sc);
+    proc.uiWidth.store (getWidth()); proc.uiHeight.store (getHeight());
 }
 
 // Test hook: drives the right-click path end to end - with and without a host-provided parameter menu.

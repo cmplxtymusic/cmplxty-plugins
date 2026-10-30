@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(GlitchCrusher VERSION 1.0.3 LANGUAGES C CXX)
+project(GlitchCrusher VERSION 1.0.5 LANGUAGES C CXX)
 # Linux builds are for the tests only; the box sysroot has no libxi headers
 if(UNIX AND NOT APPLE)
     add_compile_definitions(JUCE_USE_XINPUT=0)
