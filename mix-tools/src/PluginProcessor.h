@@ -1,4 +1,5 @@
 #pragma once
+#include "SmoothBypass.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "MixToolsDSP.h"
 #include "PresetManager.h"
@@ -18,13 +19,16 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // host bypass: a real parameter with a short, latency-matched crossfade (no click, no timing jump)
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
     const juce::String getName() const override { return "CMPLXTY Mix Tools"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.25; }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
@@ -48,5 +52,8 @@ public:
 private:
     mt::dsp::Engine engine;
     std::atomic<float> *pOrder, *pWOn, *pWidth, *pMono, *pTOn, *pAtt, *pSus, *pSpeed, *pLOn, *pDrive, *pCeil, *pRel, *pGain;
+    juce::AudioParameterBool* bypassParam = nullptr;
+    cmx::SmoothBypass bypass;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MixToolsProcessor)
 };

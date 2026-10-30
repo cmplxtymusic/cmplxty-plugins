@@ -33,6 +33,8 @@ public:
     juce::String currentName() const { return apvts.state.getProperty ("presetName", "Init").toString(); }
     int changeCount() const noexcept { return changes; }
 
+    juce::StringArray keepIds;   // parameters a preset load leaves alone (e.g. bypass)
+
     bool loadFactory (int i)
     {
         const auto& f = factoryPresets();
@@ -41,7 +43,7 @@ public:
         for (auto& v : f[(size_t) i].values) m[v.first] = v.second;
         beginLoad();
         for (auto* prm : apvts.processor.getParameters())
-            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && ! keepIds.contains (r->getParameterID()))
             {
                 auto it = m.find (r->getParameterID());
                 set (*r, it != m.end() ? r->convertTo0to1 (it->second) : r->getDefaultValue());
@@ -58,7 +60,7 @@ public:
         if (xml == nullptr || ! xml->hasTagName ("CMPLXTY_PRESET") || xml->getStringAttribute ("plugin") != plugin) return false;
         beginLoad();
         for (auto* prm : apvts.processor.getParameters())
-            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && ! keepIds.contains (r->getParameterID()))
             {
                 float v = r->getDefaultValue();
                 for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
