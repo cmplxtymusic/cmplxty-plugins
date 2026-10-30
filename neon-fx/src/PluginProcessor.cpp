@@ -32,9 +32,10 @@ const cw::PDef kParams[] = {
     { "intensity",  "Intensity",       'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
     { "mix",        "Mix",             'f', 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, "%" },
     { "output",     "Output",          'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",       "Bypass",        'b', 0, 1, 1, 1, 0.0f, "" },
 };
 enum { kDrOn, kDrDrive, kDrMode, kDrTone, kFlOn, kFlMode, kFlCut, kFlReso, kFlVowel, kFlLfoRate, kFlLfoDepth, kGtOn, kGtRate, kGtPattern, kGtDepth, kGtSmooth,
-       kStOn, kStLen, kStGate, kStDecay, kTsOn, kTsStop, kTsStart, kDj, kIntensity, kMix, kOutput, kNumParams };
+       kStOn, kStLen, kStGate, kStDecay, kTsOn, kTsStop, kTsStart, kDj, kIntensity, kMix, kOutput, kBypass, kNumParams };
 static_assert (sizeof (kParams) / sizeof (kParams[0]) == kNumParams, "parameter table and index enum disagree");
 } // namespace
 
@@ -43,6 +44,8 @@ NeonFXProcessor::NeonFXProcessor()
       apvts (*this, &undoManager, "STATE", cw::makeLayout (kParams)),
       presets (apvts, &undoManager, "Neon FX")
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     for (auto& d : kParams) raw.push_back (apvts.getRawParameterValue (d.id));
 }
 
@@ -70,6 +73,7 @@ cw::dsp::Params NeonFXProcessor::currentParams() const
 
 void NeonFXProcessor::prepareToPlay (double sr, int block)
 {
+    bypass.prepare (sr, block, juce::jmax (1, getMainBusNumOutputChannels()), 0);
     engine.prepare (sr > 0 ? sr : 48000.0);
     engine.setParams (currentParams());
     scratchR.assign ((size_t) juce::jmax (block, 4096), 0.0f);
@@ -83,6 +87,7 @@ void NeonFXProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const int n = buffer.getNumSamples(), nch = buffer.getNumChannels();
     if (nch <= 0 || n <= 0) return;
     if ((int) scratchR.size() < n) scratchR.assign ((size_t) n, 0.0f);   // host broke its block-size promise: allocate once rather than drop audio
+    bypass.pushDry (buffer);
     engine.setParams (currentParams());
     cw::dsp::Transport t;
     if (testTransport) t = *testTransport;
@@ -100,6 +105,7 @@ void NeonFXProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (testTransport && testTransport->playing) testTransport->ppq += n * t.bpm / 60.0 / getSampleRate();
     if (nch == 1) for (int i = 0; i < n; ++i) L[i] = (L[i] + R[i]) * 0.5f;
     for (int c = 2; c < nch; ++c) buffer.clear (c, 0, n);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 void NeonFXProcessor::getStateInformation (juce::MemoryBlock& dest)
