@@ -176,8 +176,9 @@ public:
                 // sample-rate reduction
                 if (resample) held[(size_t) c] = x;
                 float y = held[(size_t) c];
-                // bit-depth quantiser (mid-rise)
-                y = (std::floor (y * invStep) + 0.5f) * step;
+                // bit-depth quantiser (mid-rise, sign-symmetric): exact silence stays silent and there is no DC offset
+                // (the old floor()+0.5 mapped 0 to +half a step: a constant DC floor on silence)
+                y = std::fabs (y) < 1.0e-9f ? 0.0f : std::copysign ((std::floor (std::fabs (y) * invStep) + 0.5f) * step, y);
                 y = std::fmax (-lim, std::fmin (lim, y));
                 // CRUSH section switch: cross-fade to the untouched input
                 if (crushAmt < 1.0f) y = dry + crushAmt * (y - dry);

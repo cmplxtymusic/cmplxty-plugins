@@ -42,6 +42,7 @@ APVTS::ParameterLayout GlitchCrusherProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterBool> (pid ("crushOn"), "Crush On", true));
     p.push_back (std::make_unique<AudioParameterBool> (pid ("glitchOn"), "Glitch On", true));
     p.push_back (std::make_unique<AudioParameterBool> (pid ("filterOn"), "Filter On", false));
+    p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "bypass", 1 }, "Bypass", false));
     return { p.begin(), p.end() };
 }
 
@@ -51,6 +52,8 @@ GlitchCrusherProcessor::GlitchCrusherProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STATE", createLayout())
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     pBits  = apvts.getRawParameterValue ("bits");       pDown = apvts.getRawParameterValue ("downsample");
     pDrive = apvts.getRawParameterValue ("drive");      pProb = apvts.getRawParameterValue ("glitchProb");
     pRate  = apvts.getRawParameterValue ("glitchRate"); pRev  = apvts.getRawParameterValue ("reverse");
@@ -70,6 +73,7 @@ bool GlitchCrusherProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 
 void GlitchCrusherProcessor::prepareToPlay (double sr, int block)
 {
+    bypass.prepare (sr, block, juce::jmax (1, getMainBusNumOutputChannels()), 0);
     engine.prepare (sr, block, juce::jmax (1, getMainBusNumOutputChannels()));
     firstBlock = true;
 }
@@ -80,6 +84,7 @@ void GlitchCrusherProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     const int nCh = juce::jmin (buffer.getNumChannels(), gc::kMaxChannels);
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
 
     gc::Params p;
     p.bits = pBits->load(); p.downsample = pDown->load(); p.drive = pDrive->load();
@@ -94,12 +99,13 @@ void GlitchCrusherProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
-            if (auto bpm = pos->getBpm()) tp.bpm = *bpm;
+            if (auto bpm = pos->getBpm()) { tp.bpm = *bpm; lastBpm.store (*bpm, std::memory_order_relaxed); }
             if (pos->getIsPlaying())
                 if (auto ppq = pos->getPpqPosition()) { tp.ppq = *ppq; tp.hasPpq = true; }
         }
 
     engine.process (buffer.getArrayOfWritePointers(), nCh, n, tp);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 juce::AudioProcessorEditor* GlitchCrusherProcessor::createEditor() { return new GlitchCrusherEditor (*this); }
@@ -114,6 +120,7 @@ void GlitchCrusherProcessor::getStateInformation (juce::MemoryBlock& dest)
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             xml.setAttribute (r->paramID, (double) r->convertFrom0to1 (r->getValue()));
+    xml.setAttribute ("uiW", uiWidth.load()); xml.setAttribute ("uiH", uiHeight.load());
     copyXmlToBinary (xml, dest);
 }
 
@@ -133,6 +140,7 @@ void GlitchCrusherProcessor::setStateInformation (const void* data, int size)
                         r->setValueNotifyingHost (r->convertTo0to1 ((float) v));
                     }
             presets.setCurrent (xml->getStringAttribute ("presetName", "Init"), xml->getBoolAttribute ("presetUser", false));
+            uiWidth.store (xml->getIntAttribute ("uiW", 720)); uiHeight.store (xml->getIntAttribute ("uiH", 384));
             if (legacy)
             {
                 if (auto* f = apvts.getParameter ("filterOn")) f->setValueNotifyingHost (xml->getIntAttribute ("filterType", 0) != 0 ? 1.0f : 0.0f);
