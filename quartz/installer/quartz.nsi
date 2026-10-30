@@ -1,11 +1,11 @@
-; Quartz installer (NSIS 3, free). Build:  makensis -DVERSION=1.0.4 -DPAYLOAD=<Quartz.vst3 file> -DOUTFILE=Quartz-Setup.exe quartz.nsi
+; Quartz installer (NSIS 3, free). Build:  makensis -DVERSION=1.0.5 -DPAYLOAD=<Quartz.vst3 file> -DOUTFILE=Quartz-Setup.exe quartz.nsi
 ; - All users (admin, UAC prompt):  C:\Program Files\Common Files\VST3\Quartz.vst3     + HKLM uninstall entry
 ; - Current user (UAC declined / no admin / /CURRENTUSER):  %LOCALAPPDATA%\Programs\Common\VST3\Quartz.vst3 + HKCU entry
 ; - Upgrade: stable app id + registry key; installs over the previous version in the same scope, never touches %APPDATA%\Quartz
 ; - Switches: /S silent, /ALLUSERS, /CURRENTUSER
 Unicode true
 !ifndef VERSION
-  !define VERSION "1.0.4"
+  !define VERSION "1.0.5"
 !endif
 !ifndef PAYLOAD
   !define PAYLOAD "Quartz.vst3"

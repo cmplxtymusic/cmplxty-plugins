@@ -103,7 +103,7 @@ private:
     // ---- smoothed control values
     struct Ctl
     {
-        Smooth in, gate, bits, rateLog, drive, grit, tone, voc, cnote, low, high, dbl, widen, delay, fb, rev, decay, mix, out;
+        Smooth in, gate, bits, rateLog, drive, grit, tone, voc, cnote, low, high, dbl, widen, delay, fb, rev, decay, mix, out, out2;   // out2: second smoothing stage on the output gain (no slope step)
         Smooth wClip, wFold, wFuzz, wSaw, wSq, wNoise, echoOn, driveWet;
     } c;
     bool first = true;
@@ -159,7 +159,7 @@ private:
         setT (c.in, p.inDb); setT (c.gate, p.gateDb); setT (c.bits, p.bits); setT (c.rateLog, std::log (clampf (p.rateHz, 500.0f, 48000.0f)));
         setT (c.drive, p.driveDb); setT (c.grit, p.grit); setT (c.tone, p.toneDb); setT (c.voc, p.vocode); setT (c.cnote, p.cnote);
         setT (c.low, std::log (p.lowcut)); setT (c.high, std::log (p.highcut)); setT (c.dbl, p.doubleCt); setT (c.widen, p.widen);
-        setT (c.delay, p.delayMs); setT (c.fb, p.fb); setT (c.rev, p.reverb); setT (c.decay, p.decay); setT (c.mix, p.mix); setT (c.out, p.outDb);
+        setT (c.delay, p.delayMs); setT (c.fb, p.fb); setT (c.rev, p.reverb); setT (c.decay, p.decay); setT (c.mix, p.mix); setT (c.out, p.outDb); setT (c.out2, c.out.cur);
         setT (c.wClip, p.dtype == 0 ? 1.0f : 0.0f); setT (c.wFold, p.dtype == 1 ? 1.0f : 0.0f); setT (c.wFuzz, p.dtype == 2 ? 1.0f : 0.0f);
         setT (c.wSaw, p.cshape == 0 ? 1.0f : 0.0f); setT (c.wSq, p.cshape == 1 ? 1.0f : 0.0f); setT (c.wNoise, p.cshape == 2 ? 1.0f : 0.0f);
         setT (c.echoOn, p.delayMs >= 1.0f ? 1.0f : 0.0f);
@@ -167,16 +167,16 @@ private:
         const bool wasFirst = first; first = false;
 
         // previous values for ramps
-        const float inPrev = dbToGain (c.in.cur), outPrev = dbToGain (c.out.cur), mixPrev = c.mix.cur, widenPrev = c.widen.cur;
+        const float inPrev = dbToGain (c.in.cur), outPrev = dbToGain (c.out2.cur), mixPrev = c.mix.cur, widenPrev = c.widen.cur;
         const float vocPrev = c.voc.cur, driveWetPrev = c.driveWet.cur;
         (void) wasFirst;
         c.in.step (a15); c.gate.step (a15); c.bits.step (a15); c.rateLog.step (a15); c.drive.step (a15); c.grit.step (a15); c.tone.step (a15);
         c.voc.step (a15); c.cnote.step (a30); c.low.step (a30); c.high.step (a30); c.dbl.step (a30); c.widen.step (a15);
-        c.delay.step (a120); c.fb.step (a15); c.rev.step (a15); c.decay.step (a60); c.mix.step (a15); c.out.step (a15);
+        c.delay.step (a120); c.fb.step (a15); c.rev.step (a15); c.decay.step (a60); c.mix.step (a15); c.out.step (a15); c.out2.tgt = c.out.cur; c.out2.step (a15);
         c.wClip.step (a15); c.wFold.step (a15); c.wFuzz.step (a15); c.wSaw.step (a15); c.wSq.step (a15); c.wNoise.step (a15);
         c.echoOn.step (a30); c.driveWet.step (a15);
 
-        const float inNow = dbToGain (c.in.cur), outNow = dbToGain (c.out.cur);
+        const float inNow = dbToGain (c.in.cur), outNow = dbToGain (c.out2.cur);
         const float invN = 1.0f / (float) n;
 
         // ---- coefficient prep

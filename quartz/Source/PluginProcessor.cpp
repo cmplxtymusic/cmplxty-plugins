@@ -73,7 +73,10 @@ void QuartzProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
     engine.prepare (sampleRate);
-    setLatencySamples (engine.latency());
+    // the wet path measures one sample later than engine.latency() (2144 vs 2143 at 48 kHz); report and align to the measured value
+    const int lat = engine.latency() + 1;
+    setLatencySamples (lat);
+    bypass.prepare (sampleRate, std::max (samplesPerBlock, 16384), 2, lat);
     scratch.setSize (2, std::max (samplesPerBlock, 16384), false, true, true);
 }
 
@@ -85,6 +88,9 @@ void QuartzProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (int c = 0; c < kNumParams; ++c) pv.v[c] = raw[(size_t) c]->load (std::memory_order_relaxed);
     for (int c = nch; c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
     if (nch == 0 || n == 0) return;
+    const bool bypassed = pv.v[pBypass] > 0.5f;
+    pv.v[pBypass] = 0.0f;   // the engine always runs; SmoothBypass below crossfades to the aligned dry signal
+    bypass.pushDry (buffer);
 
     float ip[2] = { 0, 0 };
     for (int c = 0; c < std::min (nch, 2); ++c) ip[c] = buffer.getMagnitude (c, 0, n);
@@ -105,6 +111,7 @@ void QuartzProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         scopePos.store (w, std::memory_order_release);
         pos += len;
     }
+    bypass.mix (buffer, bypassed);
     const float op0 = buffer.getMagnitude (0, 0, n), op1 = nch > 1 ? buffer.getMagnitude (1, 0, n) : op0;
     auto bump = [] (std::atomic<float>& a, float v) { float o = a.load (std::memory_order_relaxed); if (v > o) a.store (v, std::memory_order_relaxed); };
     bump (inPeak[0], ip[0]); bump (inPeak[1], ip[1]); bump (outPeak[0], op0); bump (outPeak[1], op1);
