@@ -1,4 +1,5 @@
 #pragma once
+#include "SmoothBypass.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "DriftDSP.h"
 #include "PresetKit.h"
@@ -17,6 +18,9 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // host bypass: a real parameter with a short, latency-matched crossfade (no click, no timing jump)
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -24,7 +28,7 @@ public:
     const juce::String getName() const override { return "CMPLXTY Drift"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.25; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -53,6 +57,9 @@ private:
         std::atomic<float> *coarse, *fine, *shiftOn, *spread, *wide, *mix, *feedback, *keyOn, *keyAmt,
                            *lowBand, *highBand, *xoLow, *xoHigh, *slope, *soloLow, *soloMid, *soloHigh;
     } P {};
+
+    juce::AudioParameterBool* bypassParam = nullptr;
+    cmx::SmoothBypass bypass;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftProcessor)
 };
