@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "ShaperDSP.h"
 #include "PresetManager.h"
+#include "SmoothBypass.h"
 
 // CMPLXTY Sidechain Shaper: a drawable volume curve, synced to the host tempo or restarted by a sidechain (or input) transient detector.
 // Pumping, ducking, trance gates, tremolo, swells. Zero latency. The curve lives in the plug-in state (property "curve"), so it is saved
@@ -25,7 +26,10 @@ public:
     const juce::String getName() const override { return "CMPLXTY Sidechain Shaper"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.25; }
+    // host bypass: a real parameter with a short crossfade (no click)
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
@@ -58,6 +62,8 @@ public:
     std::atomic<bool> hostPlaying { false };
 
 private:
+    juce::AudioParameterBool* bypassParam = nullptr;
+    cmx::SmoothBypass bypass;
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeRedirected (juce::ValueTree&) override { ensureCurve(); refreshCurve(); }
     void ensureCurve();

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SidechainShaper VERSION 1.0.0 LANGUAGES C CXX)
+project(SidechainShaper VERSION 1.0.1 LANGUAGES C CXX)
 # Linux builds are for the tests only; the box sysroot has no libxi headers and plug-ins don't need XInput2 touch / pen input
 if(UNIX AND NOT APPLE)
     add_compile_definitions(JUCE_USE_XINPUT=0)
