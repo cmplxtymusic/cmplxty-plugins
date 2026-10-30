@@ -1,4 +1,5 @@
 #pragma once
+#include "SmoothBypass.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "NeonDSP.h"
 #include "PresetManager.h"
@@ -18,6 +19,9 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // host bypass: a real parameter with a short, latency-matched crossfade (no click, no timing jump)
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -52,5 +56,8 @@ private:
     std::vector<std::atomic<float>*> raw;
     std::vector<float> scratchR;
     float val (int i) const { return raw[(size_t) i]->load (std::memory_order_relaxed); }
+    juce::AudioParameterBool* bypassParam = nullptr;
+    cmx::SmoothBypass bypass;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeonFXProcessor)
 };

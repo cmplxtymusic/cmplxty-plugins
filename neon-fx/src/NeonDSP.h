@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "Oversampler.h"
 
 namespace cw::dsp
 {
@@ -74,7 +75,7 @@ public:
     }
     void reset()
     {
-        for (auto& c : ch) c = Chan {};
+        for (auto& c : ch) { c = Chan {}; c.os.setFactor (16); }
         for (auto& b : stBuf) std::fill (b.begin(), b.end(), 0.0f);
         for (auto& b : tsBuf) std::fill (b.begin(), b.end(), 0.0f);
         eDr = eFl = eGt = eDj = 0; gate = 1; stState = 0; stPos = 0; stX = 0; stGain = 1;
@@ -122,15 +123,13 @@ public:
                     float y;
                     switch (P.drMode)
                     {
-                        case 1:  y = std::clamp (x[c] * g, -1.0f, 1.0f) * comp; break;
-                        case 2:  y = (float) std::sin (std::clamp (x[c] * g, -64.0f, 64.0f) * (float) (kPi * 0.5)) * comp; break;
                         case 3:
                         {
                             auto& s = ch[(size_t) c];
                             if (++s.holdN >= hold) { s.holdN = 0; s.held = std::round (std::clamp (x[c], -1.0f, 1.0f) * q) / q; }
                             y = s.held; break;
                         }
-                        default: y = std::tanh (x[c] * g) * comp; break;
+                        default: y = shape (ch[(size_t) c], x[c], g, P.drMode) * comp; break;   // soft / hard / fold: 16x + ADAA
                     }
                     auto& s = ch[(size_t) c];
                     s.tone = (float) (y + toneA * (s.tone - y)); y = s.tone;
@@ -274,7 +273,34 @@ public:
 private:
     struct Fade { float a = 0; void set (double ms, double sr) { a = (float) (1.0 - std::exp (-1.0 / (ms * 0.001 * sr))); }
                   float tick2 (float v, float t) const { v += a * (t - v); return std::abs (t - v) < 1e-6f ? t : v; } };
-    struct Chan { Svf f, dj; std::array<Svf, 3> fm; float tone = 0, held = 0; int holdN = 0; };
+    // Soft (tanh), Hard (clip) and Fold (sine) drive, 16x polyphase-IIR oversampled with first-order antiderivative
+    // anti-aliasing (ADAA): fizz from folded harmonics stays far below the signal even at full drive. No added latency.
+    template <class C>
+    static float shape (C& s, float in, float g, int mode)
+    {
+        float hi[16]; s.os.up (in, hi);
+        const int F = s.os.factor();
+        for (int k = 0; k < F; ++k)
+        {
+            double v = (double) hi[k] * g;
+            if (mode == 2) v = std::clamp (v, -64.0, 64.0);
+            const double d = v - s.xp;
+            double y;
+            if (std::abs (d) < 1.0e-6) y = nl (0.5 * (v + s.xp), mode);
+            else y = (ad (v, mode) - ad (s.xp, mode)) / d;
+            s.xp = v; hi[k] = (float) y;
+        }
+        return s.os.down (hi);
+    }
+    static double nl (double u, int mode) { return mode == 1 ? std::clamp (u, -1.0, 1.0) : mode == 2 ? std::sin (u * kPi * 0.5) : std::tanh (u); }
+    static double ad (double u, int mode)
+    {
+        const double a = std::abs (u);
+        if (mode == 1) return a < 1.0 ? 0.5 * u * u : a - 0.5;
+        if (mode == 2) return -std::cos (u * kPi * 0.5) * (2.0 / kPi);
+        return a + std::log1p (std::exp (-2.0 * a)) - 0.6931471805599453;
+    }
+    struct Chan { Svf f, dj; std::array<Svf, 3> fm; float tone = 0, held = 0; int holdN = 0; cmx::Oversampler os; double xp = 0; };
     struct GS : OnePole {};
     Params P;
     double sr = 48000;
