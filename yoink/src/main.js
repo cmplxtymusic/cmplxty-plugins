@@ -142,7 +142,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1040, height: 820, minWidth: 760, minHeight: 560, backgroundColor: '#050505', title: 'Yoink',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'), autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
@@ -251,7 +251,7 @@ app.whenReady().then(() => {
       const file = await updater.downloadInstaller(info, dir, (got, total) => send('update:event', { type: 'progress', pct: total ? Math.round(got / total * 100) : 0 }), ctl.signal, 5, { ext: IS_MAC ? '.dmg' : '.exe' });
       send('update:event', { type: 'ready' });
       if (noOpen) return { file, launched: false };
-      updater.launchInstaller(file, { appPath: IS_MAC ? updater.macAppPath(app.getPath('exe')) : '' });
+      updater.launchInstaller(file, { sha256: info.sha256, appPath: IS_MAC ? updater.macAppPath(app.getPath('exe')) : '' });
       setTimeout(() => app.quit(), 700);
       return { launched: true };
     } catch (e) {

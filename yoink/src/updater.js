@@ -135,6 +135,10 @@ function downloadInstaller(info, destDir, onProgress, signal, redirects = 5, opt
 // macOS: see macInstallScript. It waits for Yoink to quit, copies the new Yoink.app over the old one, then reopens it.
 function launchInstaller(file, opts = {}) {
   const platform = opts.platform || process.platform;
+  // re-hash right before running: the file sat on disk since download and could have been swapped
+  const want = String(opts.sha256 || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('No checksum to verify the installer.');
+  if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== want) throw new Error('The installer changed after download; not running it.');
   if (platform === 'darwin') return launchMacInstaller(file, opts);
   const child = spawn(file, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false });
   child.on('error', () => {});

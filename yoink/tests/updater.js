@@ -62,6 +62,13 @@ const U = require('../src/updater');
   assert.deepStrictEqual(fs.readdirSync(dir + '/b'), [], 'a bad download is deleted');
   await assert.rejects(U.downloadInstaller({ installer: base + '/i.exe', version: '9.9.9', sha256: '' }, dir), /checksum/);
   await assert.rejects(U.downloadInstaller({ installer: base + '/nope', version: '9.9.9', sha256: sha }, dir), /404/);
+  { // launchInstaller re-hashes before spawning and refuses a swapped or unverified file
+    const f = path.join(dir, 'swap.exe'); fs.writeFileSync(f, 'good');
+    const good = crypto.createHash('sha256').update('good').digest('hex');
+    fs.writeFileSync(f, 'evil');
+    assert.throws(() => U.launchInstaller(f, { sha256: good, platform: 'win32' }), /changed after download/);
+    assert.throws(() => U.launchInstaller(f, { platform: 'win32' }), /No checksum/);
+  }
   srv.close(); fs.rmSync(dir, { recursive: true, force: true });
   console.log('updater tests passed');
   process.exit(0);
