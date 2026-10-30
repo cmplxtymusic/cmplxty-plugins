@@ -17,6 +17,7 @@ const sc::PDef kParams[] = {
     { "hold",      "Hold",            'f', 10.0f, 500.0f, 0.1f, 0.5f, 60.0f, "ms" },
     { "mix",       "Mix",             'f', 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, "%" },
     { "gain",      "Output",          'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",    "Bypass",          'b', 0, 1, 1, 1, 0.0f, "" },
 };
 } // namespace
 
@@ -31,6 +32,8 @@ SidechainShaperProcessor::SidechainShaperProcessor()
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pMode = g ("mode"); pRate = g ("rate"); pOffset = g ("offset"); pDepth = g ("depth"); pSmooth = g ("smooth"); pStereo = g ("stereo");
     pSource = g ("source"); pThr = g ("threshold"); pFocus = g ("focus"); pHold = g ("hold"); pMix = g ("mix"); pGain = g ("gain");
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     ensureCurve();
     refreshCurve();
     apvts.state.addListener (this);
@@ -95,10 +98,11 @@ sc::dsp::Params SidechainShaperProcessor::currentParams() const
     return p;
 }
 
-void SidechainShaperProcessor::prepareToPlay (double sr, int)
+void SidechainShaperProcessor::prepareToPlay (double sr, int maxBlock)
 {
     engine.setParams (currentParams());
     engine.prepare (sr > 0 ? sr : 48000.0, juce::jmax (1, getMainBusNumOutputChannels()));
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), 0);
 }
 
 void SidechainShaperProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -111,6 +115,7 @@ void SidechainShaperProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     for (int c = mainIn.getNumChannels(); c < mainOut.getNumChannels(); ++c) mainOut.clear (c, 0, n);
     const int nch = juce::jmin (2, mainOut.getNumChannels());
     if (nch <= 0 || n <= 0) return;
+    bypass.pushDry (mainOut);
 
     const float* scPtr[2] = { nullptr, nullptr }; int scCh = 0;
     if (getBusCount (true) > 1)
@@ -134,6 +139,7 @@ void SidechainShaperProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     engine.setParams (currentParams());
     engine.process (mainOut.getArrayOfWritePointers(), nch, n, scCh > 0 ? scPtr : nullptr, scCh, ti);
+    bypass.mix (mainOut, bypassParam->get());
 }
 
 void SidechainShaperProcessor::getStateInformation (juce::MemoryBlock& dest)
