@@ -89,8 +89,9 @@ int main()
         std::set<float> vals; double maxErr = 0; const double step = 2.0 / std::pow (2.0, bits);
         for (size_t i = 0; i < out[0].size(); ++i) { vals.insert (out[0][i]); maxErr = std::fmax (maxErr, std::fabs (out[0][i] - in[0][i])); }
         const size_t maxLevels = (size_t) std::pow (2.0, bits);
-        std::printf ("  sr=%.0f bits=%2d distinct levels=%zu (max %zu) max quant err=%.3e (step/2=%.3e)\n", sr, bits, vals.size(), maxLevels, maxErr, step / 2);
-        CHECK (vals.size() <= maxLevels, "too many levels at %d bits", bits);
+        // Exact silence is emitted as 0, so a waveform that crosses zero has one extra level beyond the 2^bits steps.
+        std::printf ("  sr=%.0f bits=%2d distinct levels=%zu (max %zu plus zero) max quant err=%.3e (step/2=%.3e)\n", sr, bits, vals.size(), maxLevels, maxErr, step / 2);
+        CHECK (vals.size() <= maxLevels + 1, "too many levels at %d bits", bits);
         CHECK (maxErr <= step / 2 + 1e-6, "quant error %.3e > step/2", maxErr);
         if (bits <= 8) CHECK (vals.size() >= std::min<size_t> (maxLevels, 2) , "too few levels");
     }
