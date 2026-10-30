@@ -1,7 +1,7 @@
 {
   "name": "yoink-cmplxty",
   "productName": "Yoink",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Type a phrase, find YouTube videos where people actually say it, and drag the audio clip into your DAW. Free, open-source Yoink clone for Windows.",
   "main": "src/main.js",
   "license": "MIT",
