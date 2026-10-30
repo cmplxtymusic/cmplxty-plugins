@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Visualizer VERSION 1.0.0 LANGUAGES C CXX)
+project(Visualizer VERSION 1.0.1 LANGUAGES C CXX)
 # Linux builds are for tests only; the build box sysroot has no libxi headers and the plug-in doesn't need XInput2 touch / pen input
 if(UNIX AND NOT APPLE)
     add_compile_definitions(JUCE_USE_XINPUT=0)
@@ -38,6 +38,8 @@ clap_juce_extensions_plugin(TARGET Visualizer
     CLAP_ID "com.cmplxty.visualizer"
     CLAP_FEATURES audio-effect analyzer mono stereo)
 
+include(cmake/win-version-info.cmake)
+cmplxty_win_version_info(Visualizer_CLAP "CMPLXTY Visualizer" "CMPLXTY")
 # bundled UI fonts (Barlow, SIL OFL 1.1 - see assets/fonts/OFL.txt)
 juce_add_binary_data(VZAssets SOURCES assets/fonts/Barlow-Regular.ttf assets/fonts/Barlow-SemiBold.ttf)
 set_target_properties(VZAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)

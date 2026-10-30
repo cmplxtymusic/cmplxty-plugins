@@ -98,7 +98,7 @@ inline constexpr float kStrobeBeats[] = { 1.0f, 0.5f, 0.25f, 0.125f }; // 1/4 1/
 
 inline const PDef kParams[kNumParams] = {
     { "mode",      "Mode",            'c', 0, 0, 1, 1, 32, "", VZ_MODE_CHOICES },
-    { "palette",   "Palette",         'c', 0, 0, 1, 1, 5, "", VZ_PALETTE_CHOICES },
+    { "palette",   "Palette",         'c', 0, 0, 1, 1, 0, "", VZ_PALETTE_CHOICES },
     { "speed",     "Speed",           'f', 0.0f, 4.0f, 0.001f, 0.5f, 1.0f, "x" },
     { "zoom",      "Zoom",            'f', 0.25f, 4.0f, 0.001f, 0.5f, 1.0f, "x" },
     { "detail",    "Detail",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
