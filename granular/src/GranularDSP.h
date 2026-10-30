@@ -115,7 +115,7 @@ public:
     {
         for (auto& b : buf) std::fill (b.begin(), b.end(), 0.0f);
         for (auto& g : grains) g.active = false;
-        w = 0; untilNext = 0.0; normSm = 1.0f; fbL = fbR = 0.0f; lpL1 = lpL2 = lpR1 = lpR2 = 0.0f; frz = p.freeze ? 1.0f : 0.0f;
+        w = 0; untilNext = 0.0; normSm = 1.0f; mixS = -1.0f; fbL = fbR = 0.0f; lpL1 = lpL2 = lpR1 = lpR2 = 0.0f; frz = p.freeze ? 1.0f : 0.0f;
         for (auto& pk : peaks) pk.store (0.0f, std::memory_order_relaxed);
         binAcc = 0; binPeak = 0.0f; binLen = std::max (1, (int) (sr * kBufSeconds / kPeakBins));
         inPk = outPk = 0.0f; rng.s = 0x9E3779B9u;
@@ -128,20 +128,25 @@ public:
     {
         if (len == 0 || n <= 0) return;
         float* L = ch[0]; float* R = nch > 1 ? ch[1] : nullptr;
-        const float mix = std::clamp (p.mix, 0.0f, 1.0f), gain = std::pow (10.0f, p.gainDb / 20.0f);
-        const float fb = std::clamp (p.feedback, 0.0f, 0.95f);
+        const float mixT = std::clamp (p.mix, 0.0f, 1.0f), gainT = std::pow (10.0f, p.gainDb / 20.0f);
+        const float fbT = std::clamp (p.feedback, 0.0f, 0.95f);
         const float interval = (float) sr / std::clamp (p.density, 0.5f, 200.0f);
         const float grainLen = std::clamp (p.sizeMs, 2.0f, 2000.0f) * 0.001f * (float) sr;
         // expected overlap -> loudness normalisation (smoothed per block)
         const float overlap = std::max (1.0f, grainLen / interval * windowPower (p.shape));
         const float normTarget = 1.0f / std::sqrt (overlap);
         // tone: 2-pole low-pass (two cascaded one-poles, cheap and stable at any setting)
-        const float a = 1.0f - std::exp (-2.0f * (float) kPi * std::clamp (p.toneHz, 200.0f, 20000.0f) / (float) sr);
+        const float aT = 1.0f - std::exp (-2.0f * (float) kPi * std::clamp (p.toneHz, 200.0f, 20000.0f) / (float) sr);
         const bool freezing = p.freeze;
+        const float ks = smoothK();
         float inPkB = 0.0f, outPkB = 0.0f;
 
         for (int i = 0; i < n; ++i)
         {
+            // mix, gain, feedback and tone glide (20 ms one-pole) instead of jumping: no clicks when they are moved or automated
+            if (mixS < 0.0f) { mixS = mixT; gainS = gainT; fbS = fbT; aS = aT; }
+            mixS += ks * (mixT - mixS); gainS += ks * (gainT - gainS); fbS += ks * (fbT - fbS); aS += ks * (aT - aS);
+            const float mix = mixS, gain = gainS, fb = fbS, a = aS;
             float xl = sanitize (L[i]), xr = R != nullptr ? sanitize (R[i]) : xl;
             inPkB = std::max (inPkB, std::max (std::fabs (xl), std::fabs (xr)));
             // freeze is smoothed (8 ms) so the recording fades out / in instead of cutting
@@ -285,6 +290,8 @@ private:
     int len = 0; int64_t mask = 0; int64_t w = 0;
     std::array<Grain, kMaxGrains> grains;
     double untilNext = 0.0;
+    float mixS = -1.0f, gainS = 1.0f, fbS = 0.0f, aS = 0.5f;
+    float smoothK() const noexcept { return 1.0f - std::exp (-1.0f / (0.02f * (float) sr)); }
     float normSm = 1.0f, fbL = 0, fbR = 0, lpL1 = 0, lpL2 = 0, lpR1 = 0, lpR2 = 0, frz = 0;
     int binAcc = 0, binLen = 1; float binPeak = 0;
     float inPk = 0, outPk = 0;
