@@ -1,3 +1,4 @@
+#include <cmath>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
@@ -105,6 +106,16 @@ void GlitchCrusherProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         }
 
     engine.process (buffer.getArrayOfWritePointers(), nCh, n, tp);
+    // output safety: transparent below -8 dBFS, soft knee up to a -2.7 dBFS sample ceiling (keeps true-peak under -0.3 dBFS)
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        auto* d = buffer.getWritePointer (ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const float a = std::fabs (d[i]);
+            if (a > 0.4f) d[i] = std::copysign (0.4f + 0.33f * std::tanh ((a - 0.4f) / 0.33f), d[i]);
+        }
+    }
     bypass.mix (buffer, bypassParam->get());
 }
 
