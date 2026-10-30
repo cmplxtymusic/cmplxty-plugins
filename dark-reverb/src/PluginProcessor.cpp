@@ -20,6 +20,7 @@ const dr::PDef kParams[] = {
     { "width",     "Width",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, "%" },
     { "mix",       "Mix",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.35f, "%" },
     { "gain",      "Output",        'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",    "Bypass",       'b', 0, 1, 1, 1, 0.0f, "" },
 };
 const float kShimSemis[] = { 12.0f, 7.0f, 19.0f, 24.0f, -12.0f };
 } // namespace
@@ -30,7 +31,8 @@ DarkReverbProcessor::DarkReverbProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", dr::makeLayout (kParams))
 {
-    presets.keepIds = { "freeze" };   // a performance switch: changing presets never freezes or un-freezes the tail
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds = { "freeze", "bypass" };   // performance switches: changing presets never freezes / un-freezes the tail or (un)bypasses
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pPre = g ("preDelay"); pSize = g ("size"); pDecay = g ("decay"); pDiff = g ("diffusion"); pDark = g ("dark"); pLow = g ("lowCut");
     pMetal = g ("metal"); pMod = g ("mod"); pShOn = g ("shimOn"); pShP = g ("shimPitch"); pShAmt = g ("shimAmt"); pFreeze = g ("freeze");
@@ -53,8 +55,9 @@ dr::dsp::Params DarkReverbProcessor::currentParams() const
     return p;
 }
 
-void DarkReverbProcessor::prepareToPlay (double sr, int)
+void DarkReverbProcessor::prepareToPlay (double sr, int maxBlock)
 {
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), 0);
     engine.setParams (currentParams());
     engine.prepare (sr > 0 ? sr : 48000.0, juce::jmax (1, getTotalNumOutputChannels()));
 }
@@ -64,12 +67,14 @@ void DarkReverbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
     midi.clear();
     engine.setParams (currentParams());
     const int nch = juce::jmin (2, buffer.getNumChannels());
     if (nch <= 0) return;
     engine.process (buffer.getArrayOfWritePointers(), n);
     juce::ignoreUnused (nch);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 void DarkReverbProcessor::getStateInformation (juce::MemoryBlock& dest)

@@ -1,4 +1,5 @@
 #pragma once
+#include "SmoothBypass.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PresetKit.h"
 #include "UpdateCheck.h"
@@ -19,6 +20,9 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // host bypass: a real parameter with a short, latency-matched crossfade (no click, no timing jump)
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -48,5 +52,8 @@ public:
 private:
     dr::dsp::Engine engine;
     std::atomic<float> *pPre, *pSize, *pDecay, *pDiff, *pDark, *pLow, *pMetal, *pMod, *pShOn, *pShP, *pShAmt, *pFreeze, *pWidth, *pMix, *pGain;
+    juce::AudioParameterBool* bypassParam = nullptr;
+    cmx::SmoothBypass bypass;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DarkReverbProcessor)
 };
