@@ -19,6 +19,7 @@ const rv::PDef kParams[] = {
     { "ringMix", "Ring Mix",      'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
     { "mix",     "Mix",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, "%" },
     { "gain",    "Output",        'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",  "Bypass",          'b', 0, 1, 1, 1, 0.0f, "" },
 };
 } // namespace
 
@@ -28,6 +29,8 @@ RobotVoiceProcessor::RobotVoiceProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", rv::makeLayout (kParams))
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     presets.keepIds = { "key" };   // the song key is yours; presets change the sound, not the key
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pSnap = g ("snapOn"); pKey = g ("key"); pScale = g ("scale"); pSpeed = g ("speed"); pVoc = g ("vocOn"); pCar = g ("carrier");
@@ -52,8 +55,10 @@ rv::dsp::Params RobotVoiceProcessor::currentParams() const
     return p;
 }
 
-void RobotVoiceProcessor::prepareToPlay (double sr, int)
+void RobotVoiceProcessor::prepareToPlay (double sr, int maxBlock)
 {
+    curSr = sr > 0 ? sr : 48000.0; setLatencySamples (snapLatency());
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), snapLatency());
     engine.setParams (currentParams());
     engine.prepare (sr > 0 ? sr : 48000.0, juce::jmax (1, getTotalNumOutputChannels()));
     held.clear(); midiNote.store (-1); engine.setMidiNote (-1);
@@ -64,6 +69,7 @@ void RobotVoiceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
     for (const auto m : midi)
     {
         const auto msg = m.getMessage();
@@ -74,10 +80,12 @@ void RobotVoiceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const int note = held.empty() ? -1 : held.back();
     midiNote.store (note); engine.setMidiNote (note);
     engine.setParams (currentParams());
+    syncLatency();
     const int nch = juce::jmin (2, buffer.getNumChannels());
     if (nch <= 0) return;
     engine.process (buffer.getArrayOfWritePointers(), n);
     juce::ignoreUnused (nch);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 void RobotVoiceProcessor::getStateInformation (juce::MemoryBlock& dest)
