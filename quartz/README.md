@@ -1,4 +1,4 @@
-# Quartz 1.0.4 (Windows x64 VST3: Quartz engine + ALTER voice manipulator)
+# Quartz 1.0.5 (Windows x64 VST3: Quartz engine + ALTER voice manipulator)
 
 Install: run `Quartz-Setup.exe` (per-user or all-users; updates in place, your presets in `%APPDATA%\Quartz` are kept), then in
 FL Studio: Options > Manage plugins > Find plugins. Manual install: see README-manual-install.txt in the zip.

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <array>
 #include "Engine.h"
+#include "SmoothBypass.h"
 #include "PresetStore.h"
 #include "Version.h"
 
@@ -18,7 +19,7 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
-    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }   // engine does its own latency-aligned bypass crossfade
+    void processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock (b, m); }   // SmoothBypass does the latency-aligned crossfade
     using AudioProcessor::processBlock;
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -77,6 +78,7 @@ public:
     int editorWidth = 1100;          // persisted UI size
 
 private:
+    cmx::SmoothBypass bypass;   // master bypass: raised crossfade, dry aligned to engine.latency()
     void setParamValue (int index, float value);   // gesture-wrapped, on the message thread
     qz::Engine engine;
     qz::ParamValues pv;
