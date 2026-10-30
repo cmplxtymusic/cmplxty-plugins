@@ -351,7 +351,7 @@ void GrowlEditor::addKnob (KnobBox& k, const char* id, const char* name)
     };
     k.slider.updateText();
     paramOf.push_back ({ &k.slider, id });
-    k.slider.onContextMenu = [this] (gwui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (kn, getLocalPoint (nullptr, screenPos)); };
+    k.slider.onContextMenu = [this] (gwui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (kn, toBase (getLocalPoint (nullptr, screenPos))); };
 }
 
 void GrowlEditor::addCombo (Combo& c, const char* id, const char* name)
@@ -457,7 +457,11 @@ GrowlEditor::GrowlEditor (GrowlProcessor& p) : AudioProcessorEditor (&p), proc (
     };
     noFocus (*this);
     popup.setWantsKeyboardFocus (false);
-    setSize (840, 540);
+    // resizable, fixed aspect ratio (host frame or the corner handle); the size is kept with the session
+    setResizable (true, true);
+    getConstrainer()->setFixedAspectRatio ((double) kBaseW / (double) kBaseH);
+    setResizeLimits (kBaseW * 7 / 10, kBaseH * 7 / 10, kBaseW * 3, kBaseH * 3);
+    setSize (juce::jlimit (kBaseW * 7 / 10, kBaseW * 3, p.uiWidth.load()), juce::jlimit (kBaseH * 7 / 10, kBaseH * 3, p.uiHeight.load()));
     // update check: after the editor is up, on a background thread, at most once per 24 h, silent on failure
     juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<GrowlEditor> (this)] { if (sp != nullptr) sp->startUpdateCheck(); });
 }
@@ -510,7 +514,7 @@ void GrowlEditor::showUpdateMenu()
 void GrowlEditor::resetAll()
 {
     for (auto* prm : proc.getParameters())
-        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && r->getParameterID() != "bypass")   // Reset never un/bypasses
         {
             r->beginChangeGesture(); r->setValueNotifyingHost (r->getDefaultValue()); r->endChangeGesture();
         }
@@ -585,9 +589,9 @@ void GrowlEditor::mouseDown (const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
     {
         if (auto* c = e.eventComponent; c != nullptr && c != this && paramIdOf (c).isNotEmpty())
-        { showParamMenu (*c, getLocalPoint (nullptr, e.getScreenPosition())); return; }
+        { showParamMenu (*c, toBase (getLocalPoint (nullptr, e.getScreenPosition()))); return; }
     }
-    else if (updateLinkBounds().contains (e.getPosition())) showUpdateMenu();
+    else if (updateLinkBounds().contains (toBase (e.getPosition()))) showUpdateMenu();
 }
 
 // Walks every component: nothing except the open popup / a text editor may want keyboard focus; unhandled keys must not be consumed.
@@ -625,9 +629,10 @@ juce::String GrowlEditor::auditKeyboard()
 void GrowlEditor::paint (juce::Graphics& g)
 {
     g.fillAll (kBg);
+    g.addTransform (juce::AffineTransform::scale (uiScale()));   // everything below is drawn in base (840x540) units
     // faint scan lines
     g.setColour (juce::Colours::white.withAlpha (0.015f));
-    for (int y = 0; y < getHeight(); y += 4) g.fillRect (0, y, getWidth(), 1);
+    for (int y = 0; y < kBaseH; y += 4) g.fillRect (0, y, kBaseW, 1);
     g.setColour (kPri);
     g.setFont (uiFont (24.0f, true));
     g.drawText ("CMPLXTY // GROWL", 16, 7, 330, 32, juce::Justification::centredLeft);
@@ -662,7 +667,7 @@ void GrowlEditor::paint (juce::Graphics& g)
 
 void GrowlEditor::resized()
 {
-    auto full = getLocalBounds();
+    auto full = baseBounds();
     footerArea = full.removeFromBottom (22);
     auto area = full.reduced (12, 0).withTrimmedTop (50).withTrimmedBottom (6);
     auto rowA = area.removeFromTop (142); area.removeFromTop (8);
@@ -727,10 +732,14 @@ void GrowlEditor::resized()
     for (auto [sec, a] : { std::pair<Section*, juce::Rectangle<int>> { &driveSec, driveArea }, { &formSec, formArea }, { &postSec, postArea } })
         sec->power.setBounds (a.getRight() - 50, a.getY() + 4, 42, 16);
 
-    banner.setBounds (getWidth() - 12 - 392, 9, 392, 28);
-    presetBar.setBounds (getWidth() - 12 - 330, 10, 330, 26);
-    presetMenu.setBounds (getLocalBounds());
-    popup.setBounds (getLocalBounds());
+    banner.setBounds (kBaseW - 12 - 392, 9, 392, 28);
+    presetBar.setBounds (kBaseW - 12 - 330, 10, 330, 26);
+    presetMenu.setBounds (baseBounds());
+    popup.setBounds (baseBounds());
+    // resizable window: lay out in base units, then scale every top-level child by the same factor (fixed aspect ratio)
+    const auto t = juce::AffineTransform::scale (uiScale());
+    for (auto* ch : getChildren()) ch->setTransform (t);
+    proc.uiWidth.store (getWidth()); proc.uiHeight.store (getHeight());
 }
 
 // Test hook: drives the right-click path end to end - with and without a host-provided parameter menu.

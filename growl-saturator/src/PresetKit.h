@@ -75,7 +75,7 @@ public:
         juce::XmlElement x ("CMPLXTY_PRESET");
         x.setAttribute ("plugin", plugin); x.setAttribute ("name", name); x.setAttribute ("version", ver);
         for (auto* prm : apvts.processor.getParameters())
-            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && r->getParameterID() != "bypass")
             {
                 auto* e = x.createNewChildElement ("PARAM");
                 e->setAttribute ("id", r->getParameterID()); e->setAttribute ("value", (double) r->convertFrom0to1 (r->getValue()));

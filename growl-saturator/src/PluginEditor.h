@@ -122,6 +122,10 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    static constexpr int kBaseW = 840, kBaseH = 540;    // layout units; the window scales them (resizable, fixed aspect)
+    float uiScale() const { return juce::jmax (0.1f, (float) getWidth() / (float) kBaseW); }
+    juce::Rectangle<int> baseBounds() const { return { 0, 0, kBaseW, kBaseH }; }
+    juce::Point<int> toBase (juce::Point<int> p) const { const float s = uiScale(); return { juce::roundToInt ((float) p.x / s), juce::roundToInt ((float) p.y / s) }; }
 
     // hooks for the screenshot / test harness
     void demoBanner (const gw::upd::Info& i) { showBanner (i); }
