@@ -10,6 +10,7 @@
 #include <complex>
 #include <cstdint>
 #include <vector>
+#include "Oversampler.h"
 
 namespace cw::dsp
 {
@@ -345,8 +346,24 @@ public:
 
 private:
     struct OscState { double ph[kMaxUni] {}; float pos = 0, dPos = 0, gain = 0, dGain = 0; double inc[kMaxUni] {}; float gl[kMaxUni] {}, gr[kMaxUni] {}; int mip = 0, n = 1; };
+    struct DriveOS : cmx::Oversampler { DriveOS() { setFactor (4); } double xp = 0; };
+    // tanh drive, 4x polyphase-IIR oversampled with first-order antiderivative anti-aliasing (log-cosh): no inharmonic fizz on
+    // high driven notes. Zero reported latency (minimum-phase IIR halfbands).
+    static float driveAA (DriveOS& o, float in, float drv)
+    {
+        float hi[16]; o.up (in, hi);
+        for (int k = 0; k < o.factor(); ++k)
+        {
+            const double u = (double) hi[k] * drv, d = u - o.xp;
+            const double y = std::abs (d) < 1.0e-6 ? std::tanh (0.5 * (u + o.xp)) : (lcosh (u) - lcosh (o.xp)) / d;
+            o.xp = u; hi[k] = (float) y;
+        }
+        return o.down (hi);
+    }
+    static double lcosh (double u) { const double a = std::abs (u); return a + std::log1p (std::exp (-2.0 * a)) - 0.6931471805599453; }
     struct Voice
     {
+        DriveOS dos[2];
         int note = -1; bool gate = false, held = false; float vel = 0; uint64_t age = 0;
         float pitch = 60, target = 60;
         OscState A, B; double phSub = 0; double incSub = 0; float gSub = 0, dSub = 0, gNoise = 0, dNoise = 0, subL = 0.7f, subR = 0.7f;
@@ -476,7 +493,7 @@ private:
             const float g = e * v.ampMul; v.ampMul += v.dAmpMul;
             for (int c = 0; c < 2; ++c)
             {
-                float s = P.drive > 0.001f ? std::tanh (x[c] * drv) * drvN * 1.4f : x[c];
+                float s = P.drive > 0.001f ? driveAA (v.dos[c], x[c], drv) * drvN * 1.4f : x[c];
                 float lp, bp, hp; v.f1[c].tick (s, lp, bp, hp);
                 if (ft == 0) s = lp;
                 else if (ft == 1) { float l2, b2, h2; v.f2[c].tick (lp, l2, b2, h2); s = l2; }
