@@ -5,6 +5,7 @@
 #endif
 #include "../src/RewiredEngine.cpp"
 #include "../src/OrtModel.cpp"
+#include "../src/Instruments.cpp"
 #include <cstdio>
 #include <random>
 #include <chrono>

@@ -32,5 +32,6 @@ cp "$A/Standalone/CMPLXTY Rewired.exe" "$D/"
 RW_MODELS=${RW_MODELS:-/workspace/rw-models}; RW_ORT_WIN=${RW_ORT_WIN:-/workspace/rw-research/onnxruntime-win-x64-1.23.2/lib/onnxruntime.dll}
 mkdir -p "$D/models"
 cp "$RW_MODELS/spleeter4.onnx" "$RW_MODELS/nmp.onnx" "$D/models/"
+cp models/instruments.onnx "$D/models/"   # YAMNet + instrument head (Apache-2.0), kept in the repo
 cp "$RW_ORT_WIN" "$D/models/cmplxty-rewired-ort.dll"
 echo "staged: $D   (next: makensis -DVERSION=... installer/rewired.nsi, see scripts/build-installer.sh)"

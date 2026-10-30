@@ -22,7 +22,7 @@ cp -R "$A/CLAP/CMPLXTY Rewired.clap" "$ROOT/Library/Audio/Plug-Ins/CLAP/"
 mkdir -p "$ROOT/Applications"; cp -R "$A/Standalone/CMPLXTY Rewired.app" "$ROOT/Applications/"
 RW_MODELS=${RW_MODELS:-$PWD/build/models}; RW_ORT_MAC=${RW_ORT_MAC:-$RW_MODELS/ort/osx/libonnxruntime.1.23.2.dylib}
 MD="$ROOT/Library/Application Support/CMPLXTY/Rewired"; mkdir -p "$MD"
-cp "$RW_MODELS/spleeter4.onnx" "$RW_MODELS/nmp.onnx" "$RW_ORT_MAC" "$MD/"
+cp "$RW_MODELS/spleeter4.onnx" "$RW_MODELS/nmp.onnx" models/instruments.onnx "$RW_ORT_MAC" "$MD/"
 cp installer/LICENSES.txt installer/THIRD-PARTY-LICENSES.txt "$MD/"
 if [ -n "${DEV_ID_APP:-}" ]; then
   for p in "$ROOT"/Library/Audio/Plug-Ins/*/* "$ROOT/Applications/CMPLXTY Rewired.app" "$MD/libonnxruntime.1.23.2.dylib"; do codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$p"; done

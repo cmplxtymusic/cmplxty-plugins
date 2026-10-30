@@ -3,6 +3,7 @@
 #include <cmath>
 #include <complex>
 #include <numeric>
+#include <map>
 #include <queue>
 #include <thread>
 
@@ -99,6 +100,8 @@ bool Engine::load (const std::string& dir, std::string& err, int threads)
     if (threads <= 0) threads = std::max (1, (int) std::thread::hardware_concurrency() - 1);
     if (! spleeter.load (*rt, join ("spleeter4.onnx"), threads, err)) { err = "spleeter4.onnx: " + err; return false; }
     if (! pitch.load (*rt, join ("nmp.onnx"), threads, err)) { err = "nmp.onnx: " + err; return false; }
+    std::string terr;   // optional: without it Rewired works as 1.0.0 (no instrument sub-parts)
+    tagger.load (*rt, join ("instruments.onnx"), threads, terr);
     return true;
 }
 
@@ -609,6 +612,32 @@ static void finish (Result& r, const Settings& s, const std::vector<float>& temp
     r.ok = true;
 }
 
+void Engine::labelParts (Result& r, const Settings& s, const std::array<const std::vector<float>*, kNumParts>& src,
+                         const std::array<int, kNumParts>& forced, bool shared, Progress prog)
+{
+    if (! s.instruments) return;
+    std::map<const std::vector<float>*, std::vector<InstScores>> cache;   // melody + chords often share one stem
+    for (int p : { (int) kBass, (int) kMelody, (int) kChords })
+    {
+        if (r.parts[(size_t) p].empty()) continue;
+        std::vector<InstScores> sc;
+        if (forced[(size_t) p] < 0)
+        {
+            if (! tagger.loaded() || src[(size_t) p] == nullptr || src[(size_t) p]->empty()) continue;
+            auto it = cache.find (src[(size_t) p]);
+            if (it == cache.end())
+            {
+                if (prog) prog (0.95f, "Listening for instruments");
+                std::string err;
+                if (! tagger.tag (*src[(size_t) p], sc, err, p == kBass)) continue;
+                it = cache.emplace (src[(size_t) p], std::move (sc)).first;
+            }
+            sc = it->second;
+        }
+        r.subs[(size_t) p] = labelNotes (r.parts[(size_t) p], sc, p, forced[(size_t) p], shared && p != kBass);
+    }
+}
+
 Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::atomic<bool>* cancel, Progress prog)
 {
     Result r; r.seconds = (double) song.size() / kSampleRate;
@@ -653,6 +682,12 @@ Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::
     auto d = detectDrums (st[1], s.drumSensitivity);
     for (int i = 0; i < 4; ++i) r.parts[(size_t) (kKick + i)] = std::move (d[(size_t) i]);
     finish (r, s, st[1]);
+    {
+        const bool sungMelody = r.melodyFrom == "vocals";
+        std::array<const std::vector<float>*, kNumParts> src {}; src[kBass] = &st[2]; src[kMelody] = sungMelody ? &st[0] : &st[3]; src[kChords] = &st[3];
+        std::array<int, kNumParts> forced; forced.fill (-1);
+        labelParts (r, s, src, forced, ! sungMelody, prog);
+    }
     if (prog) prog (1.0f, "Done");
     return r;
 }
@@ -690,6 +725,17 @@ Result Engine::transcribeStems (const std::array<Audio, kNumStemSlots>& stems, c
     }
     if (tempoSrc.empty()) for (auto& a : stems) if (! a.empty()) { tempoSrc = mono (a); break; }
     finish (r, s, tempoSrc);
+    {
+        std::array<std::vector<float>, 3> m; std::array<const std::vector<float>*, kNumParts> src {};
+        const int slotOf[3] = { kStemBass, kStemMelody, kStemChords };
+        std::array<int, kNumParts> forced; forced.fill (-1);
+        for (int k = 0; k < 3; ++k)
+        {
+            forced[(size_t) k] = s.stemInst[(size_t) slotOf[k]];
+            if (! stems[(size_t) slotOf[k]].empty() && forced[(size_t) k] < 0) { m[(size_t) k] = mono (stems[(size_t) slotOf[k]]); src[(size_t) k] = &m[(size_t) k]; }
+        }
+        labelParts (r, s, src, forced, false, prog);
+    }
     if (prog) prog (1.0f, "Done");
     return r;
 }

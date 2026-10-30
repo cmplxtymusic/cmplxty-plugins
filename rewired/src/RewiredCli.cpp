@@ -9,7 +9,7 @@
 int main (int argc, char** argv)
 {
     juce::StringPairArray a; juce::String song, out, json, dump; std::array<juce::String, rw::kNumStemSlots> stems;
-    rw::Settings s; juce::String models;
+    rw::Settings s; juce::String models, tagFile; bool hints = false;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const juce::String k (argv[i]), v (argv[i + 1]);
@@ -21,7 +21,21 @@ int main (int argc, char** argv)
         else if (k == "--melody-src") s.melodySource = v.getIntValue(); else if (k == "--quantize") s.quantize = v.getIntValue();
         else if (k == "--bpm") s.bpm = v.getFloatValue();
         else if (k == "--melgap") s.melodyGap = v.getIntValue();
+        else if (k == "--inst") s.instruments = v.getIntValue() != 0;
+        else if (k == "--name-hints") hints = v.getIntValue() != 0;
+        else if (k == "--tag") tagFile = v;
         else { std::fprintf (stderr, "unknown option %s\n", argv[i]); return 2; }
+    }
+    if (tagFile.isNotEmpty())   // --tag FILE --out OUT.json : pooled instrument-group scores per 0.48 s hop
+    {
+        juce::File dir = models.isNotEmpty() ? juce::File (models) : rw::io::findModelDir();
+        rw::Engine eng; std::string err;
+        if (! eng.load (dir.getFullPathName().toStdString(), err) || ! eng.instrumentsLoaded()) { std::fprintf (stderr, "load: %s\n", err.c_str()); return 1; }
+        rw::Audio au; juce::String e; if (! rw::io::loadAudio (juce::File (tagFile), au, e)) { std::fprintf (stderr, "%s\n", e.toRawUTF8()); return 1; }
+        std::vector<float> m (au.left); if (! au.right.empty()) for (size_t i = 0; i < m.size(); ++i) m[i] = 0.5f * (m[i] + au.right[i]);
+        std::vector<rw::InstScores> sc; if (! eng.tagInstruments (m, sc, err)) { std::fprintf (stderr, "%s\n", err.c_str()); return 1; }
+        juce::String j ("["); for (size_t i = 0; i < sc.size(); ++i) { j << (i ? "," : "") << "["; for (int g = 0; g < rw::kNumInst; ++g) j << (g ? "," : "") << sc[i][(size_t) g]; j << "]"; }
+        j << "]"; juce::File::getCurrentWorkingDirectory().getChildFile (out).replaceWithText (j); return 0;
     }
     if (out.isEmpty()) { std::fprintf (stderr, "usage: see source header\n"); return 2; }
     juce::File dir = models.isNotEmpty() ? juce::File (models) : rw::io::findModelDir();
@@ -51,6 +65,7 @@ int main (int argc, char** argv)
     else
     {
         std::array<rw::Audio, rw::kNumStemSlots> st;
+        if (hints) for (int i = 0; i < rw::kNumStemSlots; ++i) if (stems[(size_t) i].isNotEmpty()) s.stemInst[(size_t) i] = rw::instFromFileName (juce::File (stems[(size_t) i]).getFileName().toStdString());
         for (int i = 0; i < rw::kNumStemSlots; ++i)
             if (stems[(size_t) i].isNotEmpty() && ! rw::io::loadAudio (juce::File (stems[(size_t) i]), st[(size_t) i], e)) { std::fprintf (stderr, "%s\n", e.toRawUTF8()); return 1; }
         r = eng.transcribeStems (st, s, nullptr, prog);
@@ -61,10 +76,27 @@ int main (int argc, char** argv)
     if (! rw::io::writeMidi (juce::File::getCurrentWorkingDirectory().getChildFile (out), r, parts, "Rewired", e)) { std::fprintf (stderr, "%s\n", e.toRawUTF8()); return 1; }
     const double secs = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
     std::printf ("bpm %.2f  audio %.1fs  time %.1fs  melody-from %s\n", r.bpm, r.seconds, secs, r.melodyFrom.c_str());
-    for (int p = 0; p < rw::kNumParts; ++p) std::printf ("  %-8s %zu notes\n", rw::partName (p), r.parts[(size_t) p].size());
+    for (int p = 0; p < rw::kNumParts; ++p)
+    {
+        std::printf ("  %-8s %zu notes", rw::partName (p), r.parts[(size_t) p].size());
+        for (auto& sp : r.subs[(size_t) p]) std::printf ("  [%s %zu, %.2f]", sp.name.c_str(), sp.notes.size(), sp.confidence);
+        std::printf ("\n");
+    }
     if (json.isNotEmpty())
     {
-        juce::String j; j << "{\"bpm\":" << r.bpm << ",\"seconds\":" << r.seconds << ",\"time\":" << secs << ",\"melodyFrom\":\"" << r.melodyFrom << "\"}";
+        juce::String j; j << "{\"bpm\":" << r.bpm << ",\"seconds\":" << r.seconds << ",\"time\":" << secs << ",\"melodyFrom\":\"" << r.melodyFrom << "\",\"subs\":{";
+        for (int p = 0; p < 3; ++p)
+        {
+            j << (p ? "," : "") << "\"" << rw::partName (p) << "\":[";
+            for (size_t k = 0; k < r.subs[(size_t) p].size(); ++k)
+            {
+                auto& sp = r.subs[(size_t) p][k]; j << (k ? "," : "") << "{\"inst\":" << sp.inst << ",\"name\":\"" << sp.name << "\",\"conf\":" << sp.confidence << ",\"notes\":[";
+                for (size_t q = 0; q < sp.notes.size(); ++q) j << (q ? "," : "") << "[" << sp.notes[q].start << "," << sp.notes[q].end << "," << sp.notes[q].pitch << "]";
+                j << "]}";
+            }
+            j << "]";
+        }
+        j << "}}";
         juce::File::getCurrentWorkingDirectory().getChildFile (json).replaceWithText (j);
     }
     return 0;

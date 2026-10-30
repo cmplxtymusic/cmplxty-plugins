@@ -9,8 +9,9 @@ PARTS = ["Bass", "Melody", "Chords", "Kick", "Snare", "Hats", "Cymbals"]
 def tracks(path):
     pm = pretty_midi.PrettyMIDI(path); out = {}
     for ins in pm.instruments:
-        n = ins.name.strip()
-        out[n] = np.array([[x.start, x.end, x.pitch] for x in ins.notes]).reshape(-1, 3)
+        n = ins.name.strip().split(" (")[0].split(" - ")[0]   # 1.0.1: "Chords - Strings" / "Melody (Horns)" are instrument splits of one part
+        a = np.array([[x.start, x.end, x.pitch] for x in ins.notes]).reshape(-1, 3)
+        out[n] = np.concatenate([out[n], a]) if n in out else a
     return out
 def score(ref, est, drum):
     if len(ref) == 0 and len(est) == 0: return (1, 1, 1)

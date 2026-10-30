@@ -21,6 +21,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+=== YAMNet (instruments.onnx) - Apache-2.0 ===
+Copyright 2019 The TensorFlow Authors. Model from github.com/tensorflow/models
+(research/audioset/yamnet), converted to ONNX; CMPLXTY added a small classifier
+head trained on audio rendered from the FluidR3_GM and TimGM6mb soundfonts
+(soundfonts used for training only, not distributed). Licensed under the
+Apache License 2.0 (full text below, same as basic-pitch).
+
 === basic-pitch 0.4.0 (nmp.onnx) - Apache-2.0 ===
 Copyright 2022 Spotify AB
 

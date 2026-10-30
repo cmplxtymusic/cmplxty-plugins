@@ -72,7 +72,8 @@ public:
     void setPartOn (int p, bool on) { partEnabled[(size_t) p].store (on); ++version; }
     juce::File exportFolder() const;                         // Documents/CMPLXTY Rewired/<title>
     juce::File exportMidi (bool selectedOnly, juce::String& err);   // <title>.mid (all parts) or <title> - Selected.mid
-    juce::File exportPart (int part, juce::String& err);     // <title> - <Part>.mid (for drag-out)
+    juce::File exportPart (int part, juce::String& err);     // <title> - <Part>.mid (for drag-out); a part with instruments gets one track each
+    juce::File exportSub (int part, int sub, juce::String& err);   // <title> - <Part> - <Instrument>.mid (one instrument sub-part)
 
     // test hooks
     bool testWaitProcess (int timeoutMs);

@@ -118,7 +118,12 @@ struct PanelSpec
 const PanelSpec& panelSpec();
 class Panel;
 std::unique_ptr<juce::Component> makeDisplay (RewiredProcessor&, Panel&);
-int guessStemSlot (const juce::String& fileName);   // stem file name -> RewiredProcessor slot
+int guessStemSlot (const juce::String& fileName);   // stem file name -> RewiredProcessor slot (chords when the name says nothing)
+int stemSlotByName (const juce::String& fileName);  // same, -1 when the name says nothing
+std::vector<int> assignStemSlots (const juce::StringArray& files, const std::array<bool, 5>& occupied, int preferred = -1);   // several dropped stems -> slots
+void displayDrop (juce::Component* display, int target, const juce::StringArray& files);   // target: 0..4 slot box, 10 LOAD SONG, 11 LOAD STEMS, 20 elsewhere
+void displayExpand (juce::Component* display, int part);
+void displayHover (juce::Component* display, int target);
 
 // The whole interface, laid out at a fixed base size and scaled by the editor (so the window can be resized freely).
 class Panel final : public juce::Component, private juce::Timer

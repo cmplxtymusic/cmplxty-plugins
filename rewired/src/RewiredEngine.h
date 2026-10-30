@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "OrtModel.h"
+#include "Instruments.h"
 
 namespace rw
 {
@@ -36,6 +37,8 @@ struct Settings
     int melodyGap = 7;             // semitones the top note of a chord hit must clear the voicing by to count as melody
     int quantize = 0;              // 0 off, 1 = 1/16, 2 = 1/8, 3 = 1/4
     float bpm = 0.0f;              // 0 = detect
+    bool instruments = true;       // 1.0.1: label instruments inside Bass / Melody / Chords (needs instruments.onnx)
+    std::array<int, 4> stemInst { -1, -1, -1, -1 };   // per StemSlot: instrument named by the stem's file name (-1 = ask the model)
 };
 
 // input audio: 44.1 kHz, planar; mono buffers are fine (right = empty)
@@ -51,6 +54,7 @@ struct Result
     double bpm = 120.0;
     double seconds = 0.0;
     std::string melodyFrom;   // "vocals" / "instruments" / "stem"
+    std::array<std::vector<SubPart>, kNumParts> subs;   // 1.0.1: instrument sub-parts of Bass / Melody / Chords (empty = not labelled)
 };
 
 using Progress = std::function<void (float, const char*)>;
@@ -61,6 +65,8 @@ public:
     // dir holds the runtime library + spleeter4.onnx + nmp.onnx
     bool load (const std::string& dir, std::string& err, int threads = 0);
     bool loaded() const { return spleeter.loaded() && pitch.loaded(); }
+    bool instrumentsLoaded() const { return tagger.loaded(); }
+    bool tagInstruments (const std::vector<float>& mono44k, std::vector<InstScores>& out, std::string& err) { return tagger.tag (mono44k, out, err); }
 
     static constexpr double kSampleRate = 44100.0;
     Result transcribeSong (const Audio& song, const Settings&, const std::atomic<bool>* cancel = nullptr, Progress = {});
@@ -72,6 +78,9 @@ public:
 
 private:
     ort::Session spleeter, pitch;
+    InstrumentTagger tagger;
+    // runs the tagger on each part's source audio (after quantize, so sub-parts match the parts exactly)
+    void labelParts (Result&, const Settings&, const std::array<const std::vector<float>*, kNumParts>& src, const std::array<int, kNumParts>& forced, bool sharedMelodyChords, Progress);
 };
 
 // pure helpers

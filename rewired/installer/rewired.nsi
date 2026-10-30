@@ -1,5 +1,5 @@
 ; CMPLXTY Rewired installer (NSIS 3, free). Derived from the Quartz installer template. Build with scripts/build-installer.sh, or:
-;   makensis -DVERSION=1.0.0 -DSTAGE=<dir with "CMPLXTY Rewired.vst3" + ".clap"> -DOUTFILE=<out.exe> rewired.nsi
+;   makensis -DVERSION=1.0.1 -DSTAGE=<dir with "CMPLXTY Rewired.vst3" + ".clap"> -DOUTFILE=<out.exe> rewired.nsi
 ; - All users (admin, UAC prompt):  Common Files\VST3 and Common Files\CLAP, models + ONNX Runtime in Common Files\CMPLXTY\Rewired,
 ;   Standalone app in Program Files\CMPLXTY\Rewired + HKLM uninstall entry
 ; - Current user (UAC declined / no admin / /CURRENTUSER):  %LOCALAPPDATA%\Programs\Common\{VST3,CLAP,CMPLXTY\Rewired} + HKCU entry
@@ -9,7 +9,7 @@
 ; - Uses no comctl32/TaskDialog APIs.
 Unicode true
 !ifndef VERSION
-  !define VERSION "1.0.0"
+  !define VERSION "1.0.1"
 !endif
 !ifndef STAGE
   !define STAGE "..\dist\stage-windows-x64"
@@ -155,6 +155,7 @@ Section "-Models"
   SetOutPath "$ModelDir"
   File "${STAGE}\models\spleeter4.onnx"
   File "${STAGE}\models\nmp.onnx"
+  File "${STAGE}\models\instruments.onnx"
   File "${STAGE}\models\cmplxty-rewired-ort.dll"
   WriteRegStr SHCTX "${VKEY}" "ModelDir" "$ModelDir"
 SectionEnd
@@ -184,7 +185,7 @@ Section "-Common"
   WriteRegStr SHCTX "${UNKEY}" "QuietUninstallString" '"$AppDir\Uninstall.exe" /S'
   WriteRegDWORD SHCTX "${UNKEY}" "NoModify" 1
   WriteRegDWORD SHCTX "${UNKEY}" "NoRepair" 1
-  WriteRegDWORD SHCTX "${UNKEY}" "EstimatedSize" 110000
+  WriteRegDWORD SHCTX "${UNKEY}" "EstimatedSize" 125000
   WriteRegStr SHCTX "${VKEY}" "Version" "${VERSION}"
   ${If} $AllUsers == "1"
     DeleteRegKey HKCU "${UNKEY}"
@@ -406,6 +407,7 @@ Section "Uninstall"
     Delete "$UnModel\cmplxty-rewired-ort.dll.old"
     Delete "$UnModel\spleeter4.onnx"
     Delete "$UnModel\nmp.onnx"
+    Delete "$UnModel\instruments.onnx"
     RMDir "$UnModel"
     RMDir "$UnModel\.."
   ${EndIf}

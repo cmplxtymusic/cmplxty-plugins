@@ -16,11 +16,16 @@ natural home for it. Rewired also runs as a VST3/CLAP plug-in, because dragging 
 passes audio through untouched. All three formats share one copy of the models.
 
 ## How to use
-1. Press **Load song...**, or drop an audio file on the window. WAV, AIFF, FLAC, OGG and MP3 work, up to 15 minutes. If you have stems, press **Load stems...**
-   or drop several files: names containing bass/808/sub, drum/perc/kick/beat and vocal/vox/lead/melody are recognised, and anything else goes to Chords. Loading a song clears the stems, and loading stems clears the song.
+1. Press **Load song...**, or drag an audio file onto the SONG box (or anywhere on the window). WAV, AIFF, FLAC, OGG and MP3 work, up to 15 minutes. If you have stems, press **Load stems...**
+   or drag a file onto the BASS / MELODY / CHORDS / DRUMS box it belongs in (the box lights up while you hover). Several files dropped at once are sorted by name: names containing bass/808/sub, drum/perc/kick/beat and vocal/vox/lead/melody are recognised, horn/brass/string/piano/keys/guitar/synth/pad go to Chords, and unnamed files fill the empty boxes. Loading a song clears the stems, and loading stems clears the song.
 2. Press **Process**. A progress bar is shown and you can **Cancel**. In song mode the mix is first separated into vocals / drums / bass / other with Spleeter.
 3. Switch parts on or off with the toggles. **Export All** writes `Documents/CMPLXTY Rewired/<song>/<song>.mid`, with 7 named tracks and tempo.
    **Export Selected** writes only the parts that are switched on. You can also drag a part's **DRAG MIDI** chip, or **DRAG ALL**, onto a track.
+
+4. **Instruments (1.0.1):** under Bass, Melody and Chords a "+ N INSTR." line opens best-guess instrument sub-tracks (Horns, Winds, Strings,
+   Piano / Keys, Organ, Guitar, Mallets / Bells, Synth, Vocals, Bass Guitar, Upright Bass / Synth Bass). Each has its own **DRAG MIDI** chip, and the
+   exported file splits the part into one named track per instrument with a matching GM program. Labels are a guess from the sound and are shown as
+   "guess NN%"; a stem whose file name names the instrument (e.g. "Horns.wav") uses that name instead. They are much more reliable from stems than from a full mix.
 
 ## Controls
 - **Note Onset / Note Hold**: how readily notes start and how long they are held. Low values give more notes.
@@ -38,6 +43,8 @@ passes audio through untouched. All three formats share one copy of the models.
 - **Notes:** Spotify **basic-pitch 0.4.0** (`nmp.onnx`, Apache-2.0) runs on the bass, vocals and "other" stems. Bass is taken as monophonic lowest notes. Melody is the top line
   (from the vocals or instruments) that stands at least Melody Gap above the rest. Chords are the remaining notes, grouped where Chord Notes or more sound together.
 - **Drums:** band-split spectral flux on the drums stem: kick in the low band, snare in the mid/body band with noise, and hats in the high band. Cymbals are high-band hits with a long ring-out.
+- **Instruments:** Google **YAMNet** (Apache-2.0, ~15 MB ONNX, `models/instruments.onnx`) tags each note's audio; a small head trained on rendered
+  soundfont clips (FluidR3_GM, TimGM6mb; training only, not shipped) maps the 521 AudioSet classes to 11 groups. Bass uses the raw YAMNet classes. See `tools/instruments/`.
 - **Tempo:** autocorrelation of the onset envelope. It is used for the MIDI tempo and for quantizing.
 - **Runtime:** ONNX Runtime 1.23.2 (MIT), CPU only. It is loaded at run time from the model folder, is never linked, and is renamed `cmplxty-rewired-ort.dll` on Windows.
   The model folders are Windows `Common Files\CMPLXTY\Rewired` (per-user: `%LOCALAPPDATA%\Programs\Common\CMPLXTY\Rewired`) and macOS `/Library/Application Support/CMPLXTY/Rewired`.

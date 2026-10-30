@@ -31,8 +31,12 @@ inline bool loadAudio (const juce::File& f, Audio& out, juce::String& err, doubl
 
 inline int gmProgram (int part) { return part == kBass ? 33 : part == kMelody ? 80 : 89; }   // 0-based: Finger Bass, Square Lead, Warm Pad
 
-// type-1 file: track 0 = tempo / 4-4 / title, then one named track per part (drums on channel 10)
-inline juce::MidiFile makeMidi (const Result& r, const std::vector<int>& parts, const juce::String& title)
+// type-1 file: track 0 = tempo / 4-4 / title, then one named track per part (drums on channel 10).
+// 1.0.1: with splitInstruments, a part with instrument sub-parts is written as one track per instrument ("Chords - Strings"),
+// with a matching GM program; a part with one label keeps one track, named "Chords (Piano / Keys)".
+struct MidiTrack { juce::String name; int channel = 1, program = -1; const std::vector<Note>* notes = nullptr; };
+
+inline juce::MidiFile makeMidi (const Result& r, const std::vector<MidiTrack>& tracks, const juce::String& title)
 {
     constexpr int ppq = 960;
     juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq);
@@ -43,13 +47,13 @@ inline juce::MidiFile makeMidi (const Result& r, const std::vector<int>& parts, 
     auto tm = juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / bpm)); tm.setTimeStamp (0); head.addEvent (tm);
     auto ts = juce::MidiMessage::timeSignatureMetaEvent (4, 4); ts.setTimeStamp (0); head.addEvent (ts);
     mf.addTrack (head);
-    for (int p : parts)
+    for (const auto& t : tracks)
     {
         juce::MidiMessageSequence seq;
-        const int chn = isDrumPart (p) ? 10 : 1 + (p % 9);
-        auto n = juce::MidiMessage::textMetaEvent (3, partName (p)); n.setTimeStamp (0); seq.addEvent (n);
-        if (! isDrumPart (p)) { auto pc = juce::MidiMessage::programChange (chn, gmProgram (p)); pc.setTimeStamp (0); seq.addEvent (pc); }
-        for (const auto& note : r.parts[(size_t) p])
+        const int chn = t.channel;
+        auto n = juce::MidiMessage::textMetaEvent (3, t.name); n.setTimeStamp (0); seq.addEvent (n);
+        if (t.program >= 0) { auto pc = juce::MidiMessage::programChange (chn, t.program); pc.setTimeStamp (0); seq.addEvent (pc); }
+        for (const auto& note : *t.notes)
         {
             const int pitch = juce::jlimit (0, 127, note.pitch), v = juce::jlimit (1, 127, note.velocity);
             const double t0 = ticks (note.start), t1 = std::max (t0 + 1, ticks (note.end));
@@ -62,9 +66,48 @@ inline juce::MidiFile makeMidi (const Result& r, const std::vector<int>& parts, 
     return mf;
 }
 
-inline bool writeMidi (const juce::File& f, const Result& r, const std::vector<int>& parts, const juce::String& title, juce::String& err)
+inline std::vector<MidiTrack> partTracks (const Result& r, const std::vector<int>& parts, bool splitInstruments)
 {
-    auto mf = makeMidi (r, parts, title);
+    std::vector<MidiTrack> t;
+    int nextChn = 1;
+    for (int p : parts)
+    {
+        const auto& subs = r.subs[(size_t) p];
+        if (isDrumPart (p)) { t.push_back ({ partName (p), 10, -1, &r.parts[(size_t) p] }); continue; }
+        if (splitInstruments && subs.size() > 1)
+            for (const auto& sp : subs)
+            {
+                t.push_back ({ juce::String (partName (p)) + " - " + juce::String (sp.name), nextChn, instGmProgram (sp.inst, p), &sp.notes });
+                if (++nextChn == 10) ++nextChn; if (nextChn > 16) nextChn = 1;
+            }
+        else
+        {
+            const bool one = splitInstruments && subs.size() == 1;
+            t.push_back ({ one ? juce::String (partName (p)) + " (" + juce::String (subs[0].name) + ")" : juce::String (partName (p)), nextChn,
+                           one ? instGmProgram (subs[0].inst, p) : gmProgram (p), &r.parts[(size_t) p] });
+            if (++nextChn == 10) ++nextChn; if (nextChn > 16) nextChn = 1;
+        }
+    }
+    return t;
+}
+
+inline juce::MidiFile makeMidi (const Result& r, const std::vector<int>& parts, const juce::String& title, bool splitInstruments = true)
+{
+    return makeMidi (r, partTracks (r, parts, splitInstruments), title);
+}
+
+inline bool writeTracks (const juce::File& f, const Result& r, const std::vector<MidiTrack>& tracks, const juce::String& title, juce::String& err)
+{
+    auto mf = makeMidi (r, tracks, title);
+    f.deleteFile();
+    juce::FileOutputStream os (f);
+    if (os.failedToOpen() || ! mf.writeTo (os, 1)) { err = "Can't write " + f.getFullPathName(); return false; }
+    return true;
+}
+
+inline bool writeMidi (const juce::File& f, const Result& r, const std::vector<int>& parts, const juce::String& title, juce::String& err, bool splitInstruments = true)
+{
+    auto mf = makeMidi (r, parts, title, splitInstruments);
     f.deleteFile();
     juce::FileOutputStream os (f);
     if (os.failedToOpen() || ! mf.writeTo (os, 1)) { err = "Can't write " + f.getFullPathName(); return false; }

@@ -30,6 +30,14 @@ rw::Result demoResult()
         }
         if (bar % 4 == 0) r.parts[rw::kCymbals].push_back ({ t, t + 0.5, 49, 100 });
     }
+    // 1.0.1 instrument sub-parts: chords = strings for the first half, piano after; melody all horns
+    rw::SubPart st, pn, hn;
+    st.inst = rw::kInstStrings; st.name = "Strings"; st.confidence = 0.71f;
+    pn.inst = rw::kInstKeys; pn.name = "Piano / Keys"; pn.confidence = 0.64f;
+    hn.inst = rw::kInstHorns; hn.name = "Horns"; hn.confidence = 0.58f;
+    for (auto& n : r.parts[rw::kChords]) (n.start < 8.0 ? st : pn).notes.push_back (n);
+    hn.notes = r.parts[rw::kMelody];
+    r.subs[rw::kChords] = { st, pn }; r.subs[rw::kMelody] = { hn };
     return r;
 }
 
@@ -56,6 +64,16 @@ int procTests()
     }
     check (rwui::guessStemSlot ("My Song - Bass.wav") == RewiredProcessor::kBassStem && rwui::guessStemSlot ("drums_01.flac") == RewiredProcessor::kDrumsStem
            && rwui::guessStemSlot ("Lead Vox.wav") == RewiredProcessor::kMelodyStem && rwui::guessStemSlot ("keys.wav") == RewiredProcessor::kChordsStem, "stem names map to slots");
+    {
+        const auto a = rwui::assignStemSlots ({ "/x/Song - Horns.wav", "/x/mystery.wav", "/x/BASS.flac", "/x/vox.wav", "/x/extra.wav" }, {});
+        check (a.size() == 5 && a[0] == RewiredProcessor::kChordsStem && a[2] == RewiredProcessor::kBassStem && a[3] == RewiredProcessor::kMelodyStem
+               && a[1] == RewiredProcessor::kDrumsStem && a[4] == -1, "several dropped stems: by name, then the empty slots, extras left out");
+        std::array<bool, 5> occ {}; occ[RewiredProcessor::kChordsStem] = true;
+        const auto b = rwui::assignStemSlots ({ "/x/a.wav", "/x/b.wav" }, occ);
+        check (b[0] == RewiredProcessor::kMelodyStem && b[1] == RewiredProcessor::kBassStem, "unnamed stems fill empty slots before replacing a loaded one");
+        check (rw::instFromFileName ("Brass Section") == rw::kInstHorns && rw::instFromFileName ("violins") == rw::kInstStrings && rw::instFromFileName ("mix") == -1,
+               "stem file names can name the instrument");
+    }
 
     const auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rw_proc_test");
     tmp.deleteRecursively(); tmp.createDirectory();
@@ -92,18 +110,30 @@ int procTests()
             for (auto* e : *mf.getTrack (t)) if (e->message.isTrackNameEvent()) { names.add (e->message.getTextFromTextMetaEvent()); break; }
         return mf.getNumTracks() - 1; };
     juce::StringArray na, ns, n1;
-    check (readMidi (all, na) == 7 && na.joinIntoString (",") == "Bass,Melody,Chords,Kick,Snare,Hats,Cymbals", "full file: 7 named tracks");
-    check (readMidi (sel, ns) == 6 && ! ns.contains ("Hats"), "selected file leaves out the switched-off part");
+    check (readMidi (all, na) == 8 && na.joinIntoString (",") == "Bass,Melody (Horns),Chords - Strings,Chords - Piano / Keys,Kick,Snare,Hats,Cymbals",
+           "full file: a named track per part, one per instrument where a part has several");
+    check (readMidi (sel, ns) == 7 && ! ns.contains ("Hats"), "selected file leaves out the switched-off part");
+    {
+        auto sub = proc.exportSub (rw::kChords, 0, err); juce::StringArray nsub;
+        check (sub.existsAsFile() && readMidi (sub, nsub) == 1 && nsub[0] == "Chords - Strings" && sub.getFileName().endsWith (" - Chords - Strings.mid"),
+               "one instrument drags out on its own");
+        juce::MidiFile mf; juce::FileInputStream in (sub); mf.readFrom (in); int prog = -1, notes = 0;
+        for (auto* e : *mf.getTrack (1)) { if (e->message.isProgramChange()) prog = e->message.getProgramChangeNumber(); if (e->message.isNoteOn()) ++notes; }
+        check (prog == rw::instGmProgram (rw::kInstStrings, rw::kChords) && notes == (int) demoResult().subs[rw::kChords][0].notes.size(), "its track has the instrument's GM program and only its notes");
+        juce::String e3; check (! proc.exportSub (rw::kChords, 5, e3).existsAsFile() && e3.isNotEmpty(), "a missing instrument explains why");
+    }
     check (readMidi (one, n1) == 1 && n1[0] == "Bass" && one.getFileName().endsWith (" - Bass.mid"), "drag file holds one named part");
     {
         juce::MidiFile mf; juce::FileInputStream in (all); mf.readFrom (in);
-        bool drumsOn10 = true; for (auto* e : *mf.getTrack (4)) if (e->message.isNoteOn()) drumsOn10 &= e->message.getChannel() == 10;
+        bool drumsOn10 = true; for (auto* e : *mf.getTrack (5)) if (e->message.isNoteOn()) drumsOn10 &= e->message.getChannel() == 10;
         check (drumsOn10, "drums on MIDI channel 10");
     }
 
     juce::MemoryBlock st; proc.getStateInformation (st);
     RewiredProcessor p2; p2.setStateInformation (st.getData(), (int) st.getSize());
     check (p2.hasResult() && p2.result().parts[rw::kKick].size() == demoResult().parts[rw::kKick].size() && ! p2.partOn (rw::kHats) && p2.partOn (rw::kBass), "result + part switches survive save / load");
+    check (p2.result().subs[rw::kChords].size() == 2 && p2.result().subs[rw::kChords][1].name == "Piano / Keys"
+           && p2.result().subs[rw::kChords][0].notes.size() == demoResult().subs[rw::kChords][0].notes.size(), "instrument sub-parts survive save / load");
     check (p2.input (RewiredProcessor::kSong) == song && p2.songMode(), "inputs survive save / load");
     p2.clearAll(); check (! p2.hasResult() && ! p2.hasAnyInput() && p2.status() == RewiredProcessor::Status::idle, "clear");
     const char junk[] = "RWR1\xff\xff\xff\x7fgarbage"; p2.setStateInformation (junk, sizeof (junk)); check (true, "garbage state ignored");
@@ -163,6 +193,29 @@ int main (int argc, char** argv)
         auto pa = pk::test::auditPresets (e->getPanel(), e->getPanel().getPresetBar(), e->getPanel().getPresetMenu(), proc.presets); std::printf ("%s", pa.toRawUTF8());
         return (r.contains ("AUDIT OK") && m.contains ("MENU AUDIT OK") && pa.contains ("PRESET AUDIT OK")) ? 0 : 1;
     }
+    if (mode == "drop")   // drag and drop onto the boxes / buttons, through the display's own drop handler
+    {
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rw_drop_test"); tmp.deleteRecursively(); tmp.createDirectory();
+        auto mk = [&] (const char* n) { auto f = tmp.getChildFile (n); writeTone (f, 44100.0, 0.5); return f.getFullPathName(); };
+        const auto song = mk ("My Song.wav"), b = mk ("b1.wav"), hornsF = mk ("Horns.wav"), vox = mk ("Lead Vox.wav"), dr = mk ("drums.wav");
+        tmp.getChildFile ("notes.txt").replaceWithText ("x");
+        auto* d = e->getPanel().display();
+        rwui::displayDrop (d, 0, { song });                      check (proc.songMode() && proc.input (0).getFullPathName() == song, "drop on SONG loads the song");
+        rwui::displayDrop (d, RewiredProcessor::kBassStem, { b }); check (! proc.songMode() && proc.input (RewiredProcessor::kBassStem).getFullPathName() == b, "drop on BASS loads that stem (any name) and leaves song mode");
+        rwui::displayDrop (d, 11, { vox, hornsF, dr });          check (proc.input (RewiredProcessor::kMelodyStem).getFullPathName() == vox && proc.input (RewiredProcessor::kChordsStem).getFullPathName() == hornsF
+                                                                       && proc.input (RewiredProcessor::kDrumsStem).getFullPathName() == dr && proc.input (RewiredProcessor::kBassStem).getFullPathName() == b, "several files on LOAD STEMS go by name");
+        rwui::displayDrop (d, RewiredProcessor::kDrumsStem, { song, b }); check (proc.input (RewiredProcessor::kDrumsStem).getFullPathName() == song && proc.input (RewiredProcessor::kChordsStem).getFullPathName() == b,
+                                                                       "several unnamed files on one stem box: that box first, then the others");
+        rwui::displayDrop (d, 10, { song });                     check (proc.songMode(), "drop on LOAD SONG loads the song");
+        rwui::displayDrop (d, 20, { tmp.getChildFile ("notes.txt").getFullPathName() }); check (proc.songMode() && proc.input (0).getFullPathName() == song, "a non-audio drop changes nothing");
+        auto* tgt = dynamic_cast<juce::FileDragAndDropTarget*> (d);
+        check (tgt != nullptr && tgt->isInterestedInFileDrag ({ "/a/x.mp3" }) && tgt->isInterestedInFileDrag ({ "/a/x.AIFF" }) && tgt->isInterestedInFileDrag ({ "/a/x.ogg" })
+               && ! tgt->isInterestedInFileDrag ({ "/a/x.txt" }), "wav / mp3 / flac / aiff / ogg are accepted");
+        tmp.deleteRecursively();
+        std::printf (fails == 0 ? "DROP TESTS PASSED\n" : "%d DROP TEST(S) FAILED\n", fails);
+        ed.reset(); return fails;
+    }
+    if (mode == "subs") { rwui::displayExpand (e->getPanel().display(), rw::kChords); rwui::displayHover (e->getPanel().display(), RewiredProcessor::kChordsStem); }
     if (mode == "menu") e->getPanel().demoKnobMenu();
     if (mode == "presets") e->getPanel().getPresetBar().openMenu();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);

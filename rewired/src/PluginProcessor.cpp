@@ -163,7 +163,10 @@ void RewiredProcessor::run()
         std::array<rw::Audio, rw::kNumStemSlots> stems;
         for (int i = 0; i < rw::kNumStemSlots; ++i)
             if (in[i + 1] != juce::File() && ! rw::io::loadAudio (in[i + 1], stems[(size_t) i], e)) { fail (e); return; }
-        r = engine.transcribeStems (stems, s, &cancel, progress);
+        auto sn = s;   // a stem called "Horns.wav" / "Strings.flac" names its own instrument; the model only guesses for the others
+        for (int i = 0; i < rw::kNumStemSlots; ++i)
+            if (in[i + 1] != juce::File()) sn.stemInst[(size_t) i] = rw::instFromFileName (in[i + 1].getFileNameWithoutExtension().toStdString());
+        r = engine.transcribeStems (stems, sn, &cancel, progress);
     }
     if (! r.ok) { fail (r.error == "cancelled" ? juce::String ("Cancelled") : juce::String (r.error)); return; }
     int total = 0; for (auto& p : r.parts) total += (int) p.size();
@@ -201,6 +204,21 @@ juce::File RewiredProcessor::exportMidi (bool selectedOnly, juce::String& err)
 }
 
 juce::File RewiredProcessor::exportPart (int part, juce::String& err) { return writeParts ({ part }, juce::String (" - ") + rw::partName (part), err); }
+
+juce::File RewiredProcessor::exportSub (int part, int sub, juce::String& err)
+{
+    const auto r = result();
+    if (! r.ok) { err = "Nothing to export yet - press PROCESS first"; return {}; }
+    if (part < 0 || part >= rw::kNumParts || sub < 0 || sub >= (int) r.subs[(size_t) part].size()) { err = "No such instrument"; return {}; }
+    const auto& sp = r.subs[(size_t) part][(size_t) sub];
+    const auto dir = exportFolder();
+    if (! dir.createDirectory()) { err = "Can't create " + dir.getFullPathName(); return {}; }
+    const juce::String name = juce::String (rw::partName (part)) + " - " + juce::String (sp.name);
+    const auto f = dir.getChildFile (safeName (title()) + " - " + safeName (name) + ".mid");
+    rw::io::MidiTrack t; t.name = name; t.channel = 1; t.program = rw::instGmProgram (sp.inst, part); t.notes = &sp.notes;
+    if (! rw::io::writeTracks (f, r, { t }, title(), err)) return {};
+    return f;
+}
 
 bool RewiredProcessor::testWaitProcess (int timeoutMs)
 {
@@ -241,7 +259,17 @@ void RewiredProcessor::getStateInformation (juce::MemoryBlock& dest)
             for (auto& n : r.parts[(size_t) p]) t << juce::String (n.start, 4) << ',' << juce::String (n.end, 4) << ',' << n.pitch << ',' << n.velocity << ';';
             rx->createNewChildElement (rw::partName (p))->addTextElement (t);
         }
-    }
+        // 1.0.1: instrument sub-parts (older versions ignore the extra child; a 1.0.0 state simply has none)
+        for (int p = 0; p < rw::kNumParts; ++p)
+            for (auto& sp : r.subs[(size_t) p])
+            {
+                auto* sx = rx->createNewChildElement ("Sub");
+                sx->setAttribute ("part", p); sx->setAttribute ("inst", sp.inst); sx->setAttribute ("name", juce::String (sp.name));
+                sx->setAttribute ("conf", sp.confidence); sx->setAttribute ("fromName", sp.fromName);
+                juce::String t; for (auto& n : sp.notes) t << juce::String (n.start, 4) << ',' << juce::String (n.end, 4) << ',' << n.pitch << ',' << n.velocity << ';';
+                sx->addTextElement (t);
+            }
+        }
     const auto text = xml.toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
     juce::MemoryOutputStream out (dest, false);
     out.write ("RWR1", 4);
@@ -288,6 +316,21 @@ void RewiredProcessor::setStateInformation (const void* data, int size)
                     rw::Note n { f[0].getDoubleValue(), f[1].getDoubleValue(), juce::jlimit (0, 127, f[2].getIntValue()), juce::jlimit (1, 127, f[3].getIntValue()) };
                     if (n.end >= n.start && n.start >= 0.0) r.parts[(size_t) p].push_back (n);
                 }
+        for (auto* sx : rx->getChildWithTagNameIterator ("Sub"))
+        {
+            const int p = sx->getIntAttribute ("part", -1), inst = sx->getIntAttribute ("inst", -1);
+            if (p < 0 || p >= rw::kNumParts || inst < 0 || inst >= rw::kNumInst || r.subs[(size_t) p].size() >= 8) continue;
+            rw::SubPart sp; sp.inst = inst; sp.name = sx->getStringAttribute ("name", rw::instName (inst, p)).toStdString();
+            sp.confidence = (float) juce::jlimit (0.0, 1.0, sx->getDoubleAttribute ("conf")); sp.fromName = sx->getBoolAttribute ("fromName");
+            for (auto& tok : juce::StringArray::fromTokens (sx->getAllSubText(), ";", ""))
+            {
+                auto f = juce::StringArray::fromTokens (tok, ",", "");
+                if (f.size() != 4) continue;
+                rw::Note n { f[0].getDoubleValue(), f[1].getDoubleValue(), juce::jlimit (0, 127, f[2].getIntValue()), juce::jlimit (1, 127, f[3].getIntValue()) };
+                if (n.end >= n.start && n.start >= 0.0) sp.notes.push_back (n);
+            }
+            r.subs[(size_t) p].push_back (std::move (sp));
+        }
     }
     { const juce::ScopedLock l (resLock); res = r; }
     st.store ((int) (r.ok ? Status::ready : Status::idle));
