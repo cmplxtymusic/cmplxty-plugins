@@ -21,6 +21,7 @@ const gr::PDef kParams[] = {
     { "freeze",     "Freeze",        'b', 0, 1, 1, 1, 0.0f, "" },
     { "mix",        "Mix",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
     { "gain",       "Output",        'f', -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, "dB" },
+    { "bypass",     "Bypass",        'b', 0, 1, 1, 1, 0.0f, "" },
 };
 } // namespace
 
@@ -31,10 +32,13 @@ GranularProcessor::GranularProcessor()
       apvts (*this, &undoManager, "STATE", gr::makeLayout (kParams)),
       presets (apvts, &undoManager, "Granular")
 {
+    bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
+    presets.keepIds.addIfNotAlreadyThere ("bypass");   // presets never bypass / un-bypass
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     pSize = g ("size"); pDens = g ("density"); pPos = g ("position"); pSpray = g ("spray"); pPitch = g ("pitch"); pSpread = g ("spread");
     pMode = g ("spreadMode"); pRev = g ("reverse"); pChaos = g ("chaos"); pShape = g ("shape"); pWidth = g ("width"); pFb = g ("feedback");
     pTone = g ("tone"); pFreeze = g ("freeze"); pMix = g ("mix"); pGain = g ("gain");
+    startTimerHz (2);
 }
 
 bool GranularProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -54,8 +58,9 @@ gr::dsp::Params GranularProcessor::currentParams() const
     return p;
 }
 
-void GranularProcessor::prepareToPlay (double sr, int)
+void GranularProcessor::prepareToPlay (double sr, int maxBlock)
 {
+    bypass.prepare (sr, maxBlock, juce::jmax (1, getMainBusNumOutputChannels()), 0);
     engine.setParams (currentParams());
     engine.prepare (sr > 0 ? sr : 48000.0, juce::jmax (1, getTotalNumOutputChannels()));
 }
@@ -65,12 +70,14 @@ void GranularProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c) buffer.clear (c, 0, n);
+    bypass.pushDry (buffer);
     midi.clear();
     engine.setParams (currentParams());
     const int nch = juce::jmin (2, buffer.getNumChannels());
     if (nch <= 0) return;
     engine.process (buffer.getArrayOfWritePointers(), n);
     juce::ignoreUnused (nch);
+    bypass.mix (buffer, bypassParam->get());
 }
 
 void GranularProcessor::getStateInformation (juce::MemoryBlock& dest)
