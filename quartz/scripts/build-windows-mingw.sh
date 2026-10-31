@@ -44,7 +44,10 @@ mkdir -p dist
 EXE=$PWD/dist/Quartz-Setup-$VERSION.exe
 ZIP=$PWD/dist/Quartz-$VERSION-VST3.zip
 rm -f "$EXE" "$ZIP"
-( cd installer && makensis -V2 -DVERSION="$VERSION" -DPAYLOAD="$BIN" -DOUTFILE="$EXE" quartz.nsi )
+# makensis only packs files it can see relative to the script, so copy the payload next to it.
+cp "$BIN" installer/Quartz-payload.vst3
+( cd installer && makensis -V2 -DVERSION="$VERSION" -DPAYLOAD=Quartz-payload.vst3 -DOUTFILE="$EXE" quartz.nsi )
+rm -f installer/Quartz-payload.vst3
 ( cd "$(dirname "$BUNDLE")" && zip -r -q "$ZIP" "$(basename "$BUNDLE")" )
 ( cd dist && sha256sum "$(basename "$EXE")" "$(basename "$ZIP")" | tee SHA256SUMS )
 ls -l "$EXE" "$ZIP"
