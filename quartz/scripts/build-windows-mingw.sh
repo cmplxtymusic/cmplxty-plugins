@@ -24,6 +24,7 @@ if [ ! -f "$JI/lib/cmake/JUCE-8.0.9/JUCEConfig.cmake" ]; then
   # Configuring JUCE builds juceaide itself (it is an imported tool, not a Ninja target).
   cmake -S JUCE -B build/juce-host -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$JI" \
     -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF
+  cmake --build build/juce-host --target juce_lv2_helper --parallel
   cmake --install build/juce-host
 fi
 
