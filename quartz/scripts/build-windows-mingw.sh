@@ -22,7 +22,7 @@ fi
 JI=$PWD/build/juce-install
 if [ ! -f "$JI/lib/cmake/JUCE-8.0.9/JUCEConfig.cmake" ]; then
   cmake -S JUCE -B build/juce-host -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$JI" \
-    -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF
+    -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=ON
   cmake --build build/juce-host --target juceaide --parallel
   cmake --install build/juce-host
 fi
