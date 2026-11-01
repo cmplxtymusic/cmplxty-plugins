@@ -33,3 +33,5 @@ jobs:
     uses: ./.github/workflows/vocal-aligner.yml
   vvitch:
     uses: ./.github/workflows/vvitch.yml
+  dr-fill:
+    uses: ./.github/workflows/dr-fill.yml
