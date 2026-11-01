@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "url": "https://github.com/cmplxtymusic/cmplxty-plugins/releases/download/dr-fill-v1.0.0/CMPLXTY-Dr-Fill-Setup-1.0.0-win.exe",
+  "installer": "CMPLXTY-Dr-Fill-Setup-1.0.0-win.exe",
+  "sha256": "379a88a2612df6e42b7324e9fdbcf711f7deda6036c32f1f5a59c62a4e9f45dc",
+  "size": 11727669,
+  "notes": "Drum loops in, one fill out.",
+  "win": {
+    "version": "1.0.0",
+    "url": "https://github.com/cmplxtymusic/cmplxty-plugins/releases/download/dr-fill-v1.0.0/CMPLXTY-Dr-Fill-Setup-1.0.0-win.exe",
+    "installer": "CMPLXTY-Dr-Fill-Setup-1.0.0-win.exe",
+    "sha256": "379a88a2612df6e42b7324e9fdbcf711f7deda6036c32f1f5a59c62a4e9f45dc",
+    "size": 11727669,
+    "notes": "Drum loops in, one fill out."
+  },
+  "mac": {
+    "version": "1.0.0",
+    "url": "https://github.com/cmplxtymusic/cmplxty-plugins/releases/download/dr-fill-v1.0.0/CMPLXTY-Dr-Fill-Setup-1.0.0-mac.pkg",
+    "installer": "https://github.com/cmplxtymusic/cmplxty-plugins/releases/download/dr-fill-v1.0.0/CMPLXTY-Dr-Fill-Setup-1.0.0-mac.pkg",
+    "sha256": "65bb96ee2e697802d1e4abf70f4530bb8bb0ebddc0605e639b004be1095b2550",
+    "size": 29790802,
+    "notes": "Drum loops in, one fill out. (Mac build: unsigned, untested on a real Mac.)"
+  }
+}
