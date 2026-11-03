@@ -17,7 +17,7 @@ One window to install, update or reinstall every CMPLXTY VST3/CLAP plug-in (Wind
 
 Build: `scripts/fetch-deps.sh`, then `cmake -S . -B build/linux -G Ninja && cmake --build build/linux --target PluginHub PluginHubTest`.
 Windows: `scripts/build-windows-xwin.sh && scripts/build-installer.sh`. macOS: `scripts/build-macos-pkg.sh` (on a Mac).
-Test: `HUB_7Z=7zz PluginHubTest both /tmp/hub-test` (needs network). It unpacks the real installers into a fake Windows and macOS prefix.
+Test: `HUB_7Z=7z PluginHubTest both /tmp/hub-test` (needs network). Ubuntu's 7zip package provides `7z`, not `7zz`. It unpacks the real installers into a fake Windows and macOS prefix.
 GUI test mode: `--prefix <dir> --as win|mac [--screenshot out.png]`.
 
 Not yet verified: real installs on Windows/macOS, the UAC prompt, SmartScreen (unsigned), Gatekeeper on the unsigned/ad-hoc hub app and pkg,

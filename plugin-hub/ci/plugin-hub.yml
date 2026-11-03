@@ -35,7 +35,7 @@ jobs:
           cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF
           cmake --build build/linux --target PluginHub PluginHubTest --parallel
       - name: Hub tests (live release list, real installers unpacked into a temp prefix, presets + untouched plug-ins checked)
-        env: { HUB_7Z: 7zz }
+        env: { HUB_7Z: 7z }
         run: build/linux/PluginHubTest_artefacts/Release/PluginHubTest both "$RUNNER_TEMP/hub-test"
 
   windows:

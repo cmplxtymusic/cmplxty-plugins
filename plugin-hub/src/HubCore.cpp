@@ -388,7 +388,9 @@ static bool run (const juce::StringArray& cmd, String& out, int timeoutMs = 6000
     if (! p.start (cmd)) { out = "cannot start " + cmd[0]; return false; }
     out = p.readAllProcessOutput();
     if (! p.waitForProcessToFinish (timeoutMs)) { p.kill(); out << "\ntimed out"; return false; }
-    return p.getExitCode() == 0;
+    const auto code = p.getExitCode();
+    if (code != 0 && out.trim().isEmpty()) out = "exit " + String (code);
+    return code == 0;
 }
 static bool unpack (const File& archive, const File& dest, String& err)
 {
