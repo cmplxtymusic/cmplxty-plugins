@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "HubCore.h"
 #include "BinaryData.h"
+#include <thread>
 
 namespace
 {
@@ -50,9 +51,11 @@ public:
         setLookAndFeel (&look);
         list.setModel (this); list.setRowHeight (44); list.setOutlineThickness (0);
         addAndMakeVisible (list);
-        for (auto* b : { &refreshBtn, &goBtn, &hubUpdBtn }) addAndMakeVisible (*b);
+        for (auto* b : { &refreshBtn, &uninstallBtn, &cancelBtn, &goBtn, &hubUpdBtn }) addAndMakeVisible (*b);
         goBtn.getProperties().set ("primary", true);
-        hubUpdBtn.setVisible (false);
+        hubUpdBtn.setVisible (false); cancelBtn.setVisible (false);
+        uninstallBtn.onClick = [this] { confirmUninstall(); };
+        cancelBtn.onClick = [this] { cancelFlag = true; cancelBtn.setEnabled (false); setStatus ("Cancelling after the current step..."); };
         refreshBtn.onClick = [this] { startJob (Job::Refresh); };
         goBtn.onClick = [this] { startJob (Job::Install); };
         hubUpdBtn.onClick = [this] { juce::URL (hubUpdate.page).launchInDefaultBrowser(); };
@@ -93,13 +96,26 @@ public:
         list.setBounds (24, 99, getWidth() - 48, getHeight() - 99 - 119);
         int y = getHeight() - 108, x = 24;
         refreshBtn.setBounds (x, y, 96, 30);
+        uninstallBtn.setBounds (x + 104, y, 140, 30);
+        cancelBtn.setBounds (getWidth() - 24 - 210 - 112, y, 104, 30);
         goBtn.setBounds (getWidth() - 24 - 210, y, 210, 30);
         progress.setBounds (24, getHeight() - 70, getWidth() - 48, 6);
         hubUpdBtn.setBounds (getWidth() - 24 - 230, 22, 230, 28);
     }
 
 private:
-    enum class Job { Refresh, Install };
+    enum class Job { Refresh, Install, Uninstall };
+    void confirmUninstall()
+    {
+        juce::StringArray names;
+        for (int i = 0; i < plugins.size(); ++i) if (checked[i] && plugins[i].installed.isNotEmpty()) names.add (plugins[i].name);
+        if (names.isEmpty()) return;
+        auto opts = juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle ("Uninstall")
+                      .withMessage ("Remove the VST3 + CLAP files for:\n" + names.joinIntoString (", ")
+                                    + "\n\nYour presets and settings are kept.").withButton ("Uninstall").withButton ("Cancel")
+                      .withAssociatedComponent (this);
+        juce::AlertWindow::showAsync (opts, [safe = juce::Component::SafePointer<HubComponent> (this)] (int r) { if (safe && r == 1) safe->startJob (Job::Uninstall); });
+    }
     int getNumRows() override { return plugins.size(); }
     void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool) override
     {
@@ -118,7 +134,7 @@ private:
         g.setColour (kDim); g.drawRoundedRectangle (pill, 9.0f, 1.0f);
         g.setColour (kFg.withAlpha (0.85f)); g.drawText (p.type.toUpperCase(), pill.toNearestInt(), juce::Justification::centred);
         g.setFont (font (13.5f)); g.setColour (p.installed.isEmpty() ? kDim : kFg);
-        g.drawText (p.installed.isEmpty() ? juce::String ("-") : p.installed, 366, 0, 90, h, juce::Justification::centredLeft);
+        g.drawText (p.installed.isEmpty() ? juce::String ("-") : p.installed == "unknown" ? juce::String ("? (unreadable)") : p.installed, 366, 0, 90, h, juce::Justification::centredLeft);
         g.setColour (kFg); g.drawText (p.latest, 456, 0, 80, h, juce::Justification::centredLeft);
         auto a = p.action();
         juce::String act = ! p.checksumOk() ? "NO CHECKSUM" : a == hub::Action::Reinstall && ! on ? "UP TO DATE" : hub::actionName (a);
@@ -154,6 +170,9 @@ private:
         auto label = hub::primaryLabel (plugins, checked);
         goBtn.setButtonText (n == 0 ? juce::String ("Install") : label + " (" + juce::String (n) + ")");
         goBtn.setEnabled (n > 0 && ! busy);
+        int inst = 0; for (int i = 0; i < plugins.size(); ++i) inst += checked[i] && plugins.getReference (i).installed.isNotEmpty() ? 1 : 0;
+        uninstallBtn.setButtonText (inst == 0 ? juce::String ("Uninstall") : "Uninstall (" + juce::String (inst) + ")");
+        uninstallBtn.setEnabled (inst > 0 && ! busy);
         list.repaint(); repaint();
     }
     void setStatus (const juce::String& s) { juce::MessageManager::callAsync ([this, s, safe = juce::Component::SafePointer<HubComponent> (this)] { if (safe) { status = s; repaint(); } }); }
@@ -163,11 +182,11 @@ private:
         if (busy) return;
         job = j; busy = true; changed();
         refreshBtn.setEnabled (false);
-        if (j == Job::Install)
-        {
-            toInstall.clear();
-            for (int i = 0; i < plugins.size(); ++i) if (checked[i]) toInstall.add (plugins[i]);
-        }
+        cancelFlag = false; progressValue = 0.0;
+        cancelBtn.setVisible (j == Job::Install); cancelBtn.setEnabled (true);
+        toInstall.clear();
+        for (int i = 0; i < plugins.size(); ++i)
+            if (checked[i] && (j == Job::Install ? plugins[i].checksumOk() : plugins[i].installed.isNotEmpty())) toInstall.add (plugins[i]);
         startThread();
     }
     void run() override
@@ -176,8 +195,10 @@ private:
         {
             setStatus ("Reading the plugin list from GitHub...");
             juce::Array<hub::Plugin> got; juce::String err;
+            hub::HubUpdate upd;
+            std::thread selfCheck ([&upd, p = layout_.platform] { upd = hub::checkHubUpdate (p); });   // runs alongside the catalog
             bool ok = hub::fetchCatalog (got, layout_, err);
-            auto upd = hub::checkHubUpdate (layout_.platform);
+            selfCheck.join();
             juce::MessageManager::callAsync ([this, got, ok, err, upd, safe = juce::Component::SafePointer<HubComponent> (this)]
             {
                 if (! safe) return;
@@ -195,15 +216,18 @@ private:
         }
         else
         {
-            auto results = hub::installSelected (toInstall, layout_,
-                [this] (const juce::String& s) { setStatus (s); },
-                [this] (juce::int64 d, juce::int64 t) { progressValue = t > 0 ? (double) d / (double) t : -1.0; });
-            juce::MessageManager::callAsync ([this, results, safe = juce::Component::SafePointer<HubComponent> (this)]
+            bool uninstall = job == Job::Uninstall;
+            auto say = [this] (const juce::String& s) { setStatus (s); };
+            auto results = uninstall ? hub::uninstallSelected (toInstall, layout_, say)
+                                     : hub::installSelected (toInstall, layout_, say,
+                                           [this] (juce::int64 d, juce::int64 t) { progressValue = t > 0 ? (double) d / (double) t : -1.0; }, &cancelFlag);
+            juce::MessageManager::callAsync ([this, results, uninstall, safe = juce::Component::SafePointer<HubComponent> (this)]
             {
                 if (! safe) return;
-                int ok = 0;
-                for (auto& r : results) { ok += r.ok; resultText[r.slug] = r.ok ? "done" : r.message.substring (0, 60); }
-                lastResult = juce::String (ok) + " of " + juce::String (results.size()) + " done."
+                int ok = 0, cancelled = 0;
+                for (auto& r : results) { ok += r.ok; cancelled += r.message == "cancelled"; resultText[r.slug] = r.ok ? (uninstall ? "removed" : "done") : r.message.substring (0, 60); }
+                lastResult = juce::String (ok) + " of " + juce::String (results.size()) + (uninstall ? " removed." : " done.")
+                         + (cancelled > 0 ? " " + juce::String (cancelled) + " cancelled." : juce::String())
                          + (ok < results.size() ? " See the row notes for what failed." : juce::String()) + " Rescan your plug-ins in the DAW.";
                 status = lastResult;
                 progressValue = 0.0;
@@ -214,7 +238,7 @@ private:
     void finishJob()
     {
         busy = false;
-        refreshBtn.setEnabled (true);
+        refreshBtn.setEnabled (true); cancelBtn.setVisible (false);
         list.updateContent(); changed();
     }
     void takeShot()
@@ -229,7 +253,8 @@ private:
     hub::Layout layout_;
     juce::String shotPath, status, lastResult;
     juce::ListBox list;
-    juce::TextButton refreshBtn { "Refresh" }, goBtn { "Install" }, hubUpdBtn;
+    juce::TextButton refreshBtn { "Refresh" }, uninstallBtn { "Uninstall" }, cancelBtn { "Cancel" }, goBtn { "Install" }, hubUpdBtn;
+    std::atomic<bool> cancelFlag { false };
     double progressValue = 0.0;
     juce::ProgressBar progress { progressValue };
     juce::Array<hub::Plugin> plugins, toInstall;

@@ -1,5 +1,6 @@
 #include "HubCore.h"
 #include <regex>
+#include <thread>
 
 namespace hub
 {
@@ -43,14 +44,22 @@ bool isAllowedDownload (const String& u)
 
 // ------------------------------------------------------------------------------------------------ networking
 #if JUCE_LINUX
-static bool runCurl (juce::StringArray args, String& out, String& error, int timeoutMs)
+static bool runCurl (juce::StringArray args, String& out, String& error, int timeoutMs, const std::atomic<bool>* cancel = nullptr)
 {
     juce::StringArray cmd { "curl", "-fsSL", "--retry", "2", "--max-time", String (juce::jmax (5, timeoutMs / 1000)) };
     cmd.addArray (args);
     juce::ChildProcess p;
     if (! p.start (cmd)) { error = "curl not found"; return false; }
-    out = p.readAllProcessOutput();
-    p.waitForProcessToFinish (timeoutMs + 5000);
+    if (cancel != nullptr)   // downloads write to a file (-o), so there is no stdout to drain while polling
+    {
+        auto end = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs + 5000;
+        while (p.isRunning())
+        {
+            if (cancel->load() || juce::Time::getMillisecondCounter() > end) { p.kill(); error = cancel->load() ? "cancelled" : "timed out"; return false; }
+            juce::Thread::sleep (50);
+        }
+    }
+    else { out = p.readAllProcessOutput(); p.waitForProcessToFinish (timeoutMs + 5000); }
     if (p.getExitCode() != 0) { error = "HTTP request failed (curl exit " + String (p.getExitCode()) + ")"; return false; }
     return true;
 }
@@ -73,7 +82,7 @@ bool httpGet (const String& url, String& body, String& error, int timeoutMs)
    #endif
 }
 
-bool download (const String& url, const File& dest, String& error, Progress progress)
+bool download (const String& url, const File& dest, String& error, Progress progress, const std::atomic<bool>* cancel)
 {
     error = {};
     if (! isAllowedDownload (url)) { error = "refused: not a cmplxty-plugins release asset: " + url; return false; }
@@ -82,7 +91,9 @@ bool download (const String& url, const File& dest, String& error, Progress prog
     tmp.deleteFile();
    #if JUCE_LINUX
     String out;
-    if (! runCurl ({ "-o", tmp.getFullPathName(), url }, out, error, 600000)) { tmp.deleteFile(); return false; }
+    static const std::atomic<bool> never { false };
+    if (! runCurl ({ "-o", tmp.getFullPathName(), url }, out, error, 600000, cancel != nullptr ? cancel : &never)) { tmp.deleteFile(); return false; }
+    if (progress) progress (tmp.getSize(), tmp.getSize());
    #else
     int status = 0;
     auto opts = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
@@ -96,6 +107,7 @@ bool download (const String& url, const File& dest, String& error, Progress prog
         juce::HeapBlock<char> buf (1 << 16);
         for (;;)
         {
+            if (cancel != nullptr && cancel->load()) { error = "cancelled"; break; }
             auto n = in->read (buf, 1 << 16);
             if (n <= 0) break;
             os.write (buf, (size_t) n); done += n;
@@ -179,13 +191,15 @@ String typeFor (const String& slug)
 Action Plugin::action() const
 {
     if (installed.isEmpty()) return Action::Install;
+    if (installed == "unknown") return Action::Unknown;
     auto c = compareVersions (installed, latest);
     return c < 0 ? Action::Update : c == 0 ? Action::Reinstall : Action::Downgrade;
 }
 String actionName (Action a)
 {
     switch (a) { case Action::Install: return "INSTALL"; case Action::Update: return "UPDATE";
-                 case Action::Reinstall: return "REINSTALL"; case Action::Downgrade: return "REPLACE (NEWER INSTALLED)"; }
+                 case Action::Reinstall: return "REINSTALL"; case Action::Downgrade: return "REPLACE (NEWER INSTALLED)";
+                 case Action::Unknown: return "REINSTALL (VERSION ?)"; }
     return {};
 }
 
@@ -268,18 +282,27 @@ String parseSumsFile (const String& text, const String& fileName)
     return {};
 }
 
+static void resolveChecksum (Plugin& pl)
+{
+    if (pl.checksumOk()) return;
+    auto base = String (kDownloadPrefix) + pl.tag + "/";
+    for (auto cand : { base + "SHA256SUMS", base + pl.assetName + ".sha256" })
+    {
+        String body, err;
+        if (httpGet (cand, body, err, 6000) && (pl.sha256 = parseSumsFile (body, pl.assetName)).isNotEmpty()) break;
+    }
+}
+template <typename Fn> static void forEachParallel (juce::Array<Plugin>& list, Fn fn)
+{
+    std::vector<std::thread> ts;
+    for (auto& pl : list) ts.emplace_back ([&pl, &fn] { fn (pl); });
+    for (auto& t : ts) t.join();
+}
 bool resolveChecksums (juce::Array<Plugin>& list, String& log)
 {
+    forEachParallel (list, [] (Plugin& pl) { resolveChecksum (pl); });
     bool all = true;
-    for (auto& pl : list)
-    {
-        if (pl.checksumOk()) continue;
-        auto base = String (kDownloadPrefix) + pl.tag + "/";
-        String body, err;
-        for (auto cand : { base + "SHA256SUMS", base + pl.assetName + ".sha256" })
-            if (httpGet (cand, body, err) && (pl.sha256 = parseSumsFile (body, pl.assetName)).isNotEmpty()) break;
-        if (! pl.checksumOk()) { all = false; log << pl.slug << ": no published sha256 (install disabled)\n"; }
-    }
+    for (auto& pl : list) if (! pl.checksumOk()) { all = false; log << pl.slug << ": no published sha256 (install disabled)\n"; }
     return all;
 }
 
@@ -335,7 +358,7 @@ static bool fetchAllReleases (String& body, String& error)
     for (int page = 1; page <= 10; ++page)
     {
         String chunk;
-        if (! httpGet (String (kReleasesApi) + "&page=" + String (page), chunk, error)) return false;
+        if (! httpGet (String (kReleasesApi) + "&page=" + String (page), chunk, error, kApiTimeoutMs)) return false;
         auto v = juce::JSON::parse (chunk);
         auto* a = v.getArray();
         if (a == nullptr) { error = "unexpected reply from GitHub (rate limited?)"; return false; }
@@ -354,13 +377,14 @@ bool fetchCatalog (juce::Array<Plugin>& out, const Layout& l, String& error, boo
     else if (cache.existsAsFile()) { body = cache.loadFileAsString(); error = "offline - using the last saved plugin list"; }
     else return false;
     out = parseReleases (body, l.platform);
-    if (withVersionJson)
-        for (auto& pl : out)
-        {
-            String vj, e;
-            if (httpGet ("https://cmplxty.music/plugins/" + pl.slug + "/version.json", vj, e, 6000)) applyVersionJson (pl, vj, l.platform);
-        }
-    String log; resolveChecksums (out, log);
+    // per plug-in side lookups (version.json, then SHA256SUMS if still needed) all run at once
+    forEachParallel (out, [&] (Plugin& pl)
+    {
+        String vj, e;
+        if (withVersionJson && httpGet ("https://cmplxty.music/plugins/" + pl.slug + "/version.json", vj, e, kSideTimeoutMs))
+            applyVersionJson (pl, vj, l.platform);
+        resolveChecksum (pl);
+    });
     for (auto& pl : out) detectInstalled (pl, l);
     return true;
 }
@@ -498,28 +522,52 @@ static bool windowsInstall (const File& installer, String& msg)
 #endif
 
 #if JUCE_MAC
-static bool macInstallBatch (const juce::Array<File>& pkgs, const Layout& l, String& msg)
+// one administrator prompt for the batch, but each pkg runs on its own and its exit code is recorded, so one bad
+// package never marks the others failed. Returns per-pkg exit codes (-1 = never ran).
+static juce::Array<int> macInstallBatch (const juce::Array<File>& pkgs, const Layout& l, String& msg)
 {
     // one administrator prompt for the whole batch; `installer` does not apply Gatekeeper to the pkg (it was not
     // downloaded by a browser, so it carries no quarantine flag); the pkgs only write /Library/Audio/Plug-Ins + /Applications.
     auto script = l.work.getChildFile ("install-batch.sh");
-    String s = "#!/bin/sh\nset -e\n";
-    for (auto& p : pkgs) s << "/usr/sbin/installer -pkg '" << p.getFullPathName().replace ("'", "'\\''") << "' -target /\n";
+    auto status = l.work.getChildFile ("install-batch.status");
+    status.deleteFile();
+    auto q = [] (const File& f) { return "'" + f.getFullPathName().replace ("'", "'\\''") + "'"; };
+    String s = "#!/bin/sh\n";
+    for (int i = 0; i < pkgs.size(); ++i)
+        s << "/usr/sbin/installer -pkg " << q (pkgs[i]) << " -target / ; echo \"" << i << " $?\" >> " << q (status) << "\n";
     script.replaceWithText (s);
     script.setExecutePermission (true);
     auto shellCmd = ("/bin/sh '" + script.getFullPathName() + "'").replace ("\\", "\\\\").replace ("\"", "\\\"");
     String out;
-    bool ok = run ({ "/usr/bin/osascript", "-e", "do shell script \"" + shellCmd + "\" with administrator privileges" }, out, 30 * 60 * 1000);
-    msg = out.trim().substring (0, 400);
-    return ok;
+    run ({ "/usr/bin/osascript", "-e", "do shell script \"" + shellCmd + "\" with administrator privileges" }, out, 30 * 60 * 1000);
+    msg = out.trim().substring (0, 300);
+    juce::Array<int> codes; for (int i = 0; i < pkgs.size(); ++i) codes.add (-1);
+    for (auto& line : juce::StringArray::fromLines (status.loadFileAsString()))
+    {
+        auto idx = line.upToFirstOccurrenceOf (" ", false, false).getIntValue();
+        if (line.isNotEmpty() && juce::isPositiveAndBelow (idx, codes.size())) codes.set (idx, line.fromFirstOccurrenceOf (" ", false, false).getIntValue());
+    }
+    return codes;
 }
 #endif
 
-juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, Log log, Progress progress)
+juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, Log log, Progress progress, const std::atomic<bool>* cancel)
 {
     juce::Array<Result> results;
     auto say = [&] (const String& s) { if (log) log (s); };
+    auto cancelled = [&] { return cancel != nullptr && cancel->load(); };
     l.work.createDirectory();
+
+    // batch-wide progress: downloads are 85% of the bar (weighted by size), installs the last 15%
+    juce::int64 totalBytes = 0; for (auto& pl : sel) totalBytes += juce::jmax ((juce::int64) 1, pl.size);
+    juce::int64 bytesDone = 0; int installsDone = 0, installsTotal = 0;
+    auto report = [&] (juce::int64 cur)
+    {
+        if (! progress) return;
+        double f = 0.85 * (double) (bytesDone + cur) / (double) juce::jmax ((juce::int64) 1, totalBytes)
+                 + 0.15 * (installsTotal > 0 ? (double) installsDone / installsTotal : 0.0);
+        progress ((juce::int64) (juce::jlimit (0.0, 1.0, f) * 1000.0), 1000);
+    };
 
     // 1. download + verify everything first, so nothing is replaced unless every file is good
     juce::Array<File> files; juce::Array<int> ready;
@@ -529,19 +577,23 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
         Result r; r.slug = pl.slug;
         auto dest = l.work.getChildFile ("downloads").getChildFile (pl.tag).getChildFile (pl.assetName);
         String err;
-        if (! pl.checksumOk()) r.message = "no published checksum - skipped";
+        if (cancelled()) r.message = "cancelled";
+        else if (! pl.checksumOk()) r.message = "no published checksum - skipped";
         else if (dest.existsAsFile() && sha256Of (dest) == pl.sha256) { r.ok = true; say (pl.name + ": cached download verified"); }
         else
         {
             say ("Downloading " + pl.name + " " + pl.latest + "...");
-            if (! download (pl.url, dest, err, [&] (juce::int64 d, juce::int64 t) { if (progress) progress (d, t); })) r.message = err;
+            if (! download (pl.url, dest, err, [&] (juce::int64 d, juce::int64) { report (juce::jmin (d, juce::jmax ((juce::int64) 1, pl.size))); }, cancel)) r.message = err;
             else if (sha256Of (dest) != pl.sha256) { r.message = "checksum mismatch - deleted"; dest.deleteFile(); }
             else r.ok = true;
         }
+        bytesDone += juce::jmax ((juce::int64) 1, pl.size); report (0);
         if (r.ok) { files.add (dest); ready.add (i); } else say (pl.name + ": " + r.message);
         results.add (r);
     }
+    if (cancelled()) { for (auto& r : results) if (r.ok) { r.ok = false; r.message = "cancelled"; } say ("Cancelled - nothing was changed."); return results; }
     if (ready.isEmpty()) return results;
+    installsTotal = ready.size();
 
     // 2. presets: snapshot + backup
     auto before = snapshot (l.presetRoots);
@@ -549,18 +601,25 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
     if (backup == File()) { for (auto& r : results) if (r.ok) { r.ok = false; r.message = err; } say (err); return results; }
     say ("Presets backed up (" + String ((int) before.files.size()) + " files) to " + backup.getFullPathName());
 
-    // 3. install
+    // 3. install (cancel stops before the next plug-in; one that is already running finishes)
    #if JUCE_MAC
     if (! l.staged)
     {
-        String msg; bool ok = macInstallBatch (files, l, msg);
-        for (auto i : ready) { auto& r = results.getReference (i); r.ok = ok; r.message = ok ? "installed" : "macOS installer: " + msg; }
+        say ("Installing " + String (files.size()) + " package(s) - macOS will ask for your password once...");
+        String msg; auto codes = macInstallBatch (files, l, msg);
+        for (int k = 0; k < ready.size(); ++k)
+        {
+            auto& r = results.getReference (ready[k]); auto c = codes[k];
+            r.ok = c == 0; r.message = c == 0 ? "installed" : c < 0 ? "not run (" + (msg.isNotEmpty() ? msg : String ("password prompt cancelled?")) + ")" : "macOS installer exit " + String (c);
+        }
+        installsDone = installsTotal; report (0);
     }
     else
    #endif
     for (int k = 0; k < ready.size(); ++k)
     {
         auto& pl = sel.getReference (ready[k]); auto& r = results.getReference (ready[k]);
+        if (cancelled()) { r.ok = false; r.message = "cancelled"; continue; }
         say ("Installing " + pl.name + " " + pl.latest + "...");
         String msg;
        #if JUCE_WINDOWS
@@ -569,6 +628,7 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
         r.ok = stagedInstall (pl, files[k], l, msg);
        #endif
         r.message = msg;
+        ++installsDone; report (0);
     }
 
     // 4. presets intact?
@@ -580,14 +640,77 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
         say ("WARNING: " + String (missing.size()) + " preset file(s) changed during install - " + (restored ? "restored from backup" : "restore FAILED, backup kept at " + backup.getFullPathName()));
     }
 
-    // 5. confirm version on disk
+    // 5. confirm version on disk, per plug-in
     for (auto i : ready)
     {
         auto& pl = sel.getReference (i); auto& r = results.getReference (i);
+        if (r.message == "cancelled") continue;
         detectInstalled (pl, l);
         if (r.ok && compareVersions (pl.installed, pl.latest) != 0) { r.ok = false; r.message = "installed version reads " + pl.installed; }
         say (pl.name + ": " + (r.ok ? "OK, now " + pl.installed : "FAILED - " + r.message));
     }
+    if (progress) progress (1000, 1000);
+    return results;
+}
+
+// ------------------------------------------------------------------------------------------------ uninstall
+bool isSafeToRemove (const File& f, const Plugin& pl, const Layout& l)
+{
+    if (f == File() || ! f.exists()) return false;
+    auto ext = f.getFileExtension().toLowerCase();
+    auto& dirs = ext == ".vst3" ? l.vst3Dirs : l.clapDirs;
+    if (ext != ".vst3" && ext != ".clap") return false;
+    bool inDir = false; for (auto& d : dirs) inDir = inDir || f.getParentDirectory() == d;
+    if (! inDir) return false;
+    auto stem = f.getFileNameWithoutExtension();
+    if (pl.bundle.isEmpty() || (stem != pl.bundle && stem != "CMPLXTY " + pl.bundle && "CMPLXTY " + stem != pl.bundle)) return false;
+    for (auto& r : l.presetRoots) if (f == r || f.isAChildOf (r) || r.isAChildOf (f)) return false;
+    return true;
+}
+
+juce::Array<Result> uninstallSelected (juce::Array<Plugin>& sel, const Layout& l, Log log)
+{
+    juce::Array<Result> results;
+    auto say = [&] (const String& s) { if (log) log (s); };
+    l.work.createDirectory();
+    auto before = snapshot (l.presetRoots);
+    juce::Array<File> targets; juce::Array<int> owner;
+    for (int i = 0; i < sel.size(); ++i)
+    {
+        auto& pl = sel.getReference (i); detectInstalled (pl, l);
+        Result r; r.slug = pl.slug;
+        int n = 0;
+        for (auto f : { pl.installedVst3, pl.installedClap })
+            if (f != File())
+            {
+                if (isSafeToRemove (f, pl, l)) { targets.add (f); owner.add (i); ++n; }
+                else say (pl.name + ": refusing to remove " + f.getFullPathName());
+            }
+        r.message = n == 0 ? "not installed" : String();
+        results.add (r);
+    }
+   #if JUCE_MAC
+    if (! l.staged && ! targets.isEmpty())
+    {
+        String cmd; for (auto& f : targets) cmd << "/bin/rm -rf '" << f.getFullPathName().replace ("'", "'\\''") << "' ; ";
+        String out;
+        run ({ "/usr/bin/osascript", "-e", "do shell script \"" + cmd.replace ("\\", "\\\\").replace ("\"", "\\\"") + "\" with administrator privileges" }, out, 5 * 60 * 1000);
+    }
+    else
+   #endif
+    for (auto& f : targets) { say ("Removing " + f.getFullPathName()); f.isDirectory() ? (void) f.deleteRecursively() : (void) f.deleteFile(); }
+
+    for (int i = 0; i < sel.size(); ++i)
+    {
+        auto& pl = sel.getReference (i); auto& r = results.getReference (i);
+        if (r.message == "not installed") continue;
+        detectInstalled (pl, l);
+        r.ok = pl.installed.isEmpty();
+        r.message = r.ok ? "removed" : "still installed (permission?)";
+        say (pl.name + ": " + r.message);
+    }
+    auto changed = diffMissingOrChanged (before, snapshot (l.presetRoots));
+    say (changed.isEmpty() ? "Presets verified: untouched" : "WARNING: " + String (changed.size()) + " preset file(s) changed");
     return results;
 }
 
@@ -596,7 +719,7 @@ HubUpdate checkHubUpdate (Platform p, const String& releasesJson)
 {
     HubUpdate u;
     String body, err;
-    if (httpGet (kHubVersionJson, body, err, 6000))
+    if (httpGet (kHubVersionJson, body, err, kSideTimeoutMs))
     {
         auto v = juce::JSON::parse (body);
         auto block = v[platformName (p).toRawUTF8()];
@@ -610,7 +733,7 @@ HubUpdate checkHubUpdate (Platform p, const String& releasesJson)
         }
     }
     auto json = releasesJson;
-    if (json.isEmpty() && ! httpGet (kReleasesApi, json, err)) return u;
+    if (json.isEmpty() && ! httpGet (kReleasesApi, json, err, kApiTimeoutMs)) return u;
     auto arr = juce::JSON::parse (json);
     if (auto* a = arr.getArray())
         for (auto& r : *a)

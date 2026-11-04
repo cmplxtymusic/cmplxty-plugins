@@ -12,6 +12,7 @@
 #include <juce_cryptography/juce_cryptography.h>
 #include <functional>
 #include <map>
+#include <atomic>
 
 #ifndef HUB_VERSION_STRING
  #define HUB_VERSION_STRING "0.0.0"
@@ -34,7 +35,7 @@ bool isAllowedDownload (const juce::String& url);
 // --- networking (WinINet / NSURLSession through juce::URL; curl(1) on Linux, where the JUCE build has no TLS)
 using Progress = std::function<void (juce::int64 done, juce::int64 total)>;
 bool httpGet (const juce::String& url, juce::String& body, juce::String& error, int timeoutMs = 15000);
-bool download (const juce::String& url, const juce::File& dest, juce::String& error, Progress = {});
+bool download (const juce::String& url, const juce::File& dest, juce::String& error, Progress = {}, const std::atomic<bool>* cancel = nullptr);
 juce::String sha256Of (const juce::File&);
 
 // --- where things live
@@ -50,7 +51,7 @@ struct Layout
 };
 
 // --- catalog
-enum class Action { Install, Update, Reinstall, Downgrade };
+enum class Action { Install, Update, Reinstall, Downgrade, Unknown };   // Unknown: installed, version unreadable
 struct Plugin
 {
     juce::String slug, name, bundle, type, tag, latest, notes;
@@ -67,7 +68,7 @@ juce::String primaryLabel (const juce::Array<Plugin>&, const juce::Array<bool>& 
 
 juce::Array<Plugin> parseReleases (const juce::String& releasesJson, Platform, juce::StringArray* skippedLog = nullptr);
 void applyVersionJson (Plugin&, const juce::String& versionJson, Platform);   // only if same release
-bool resolveChecksums (juce::Array<Plugin>&, juce::String& log);              // SHA256SUMS / .sha256 assets
+bool resolveChecksums (juce::Array<Plugin>&, juce::String& log);              // SHA256SUMS / .sha256 assets (parallel)
 juce::String parseSumsFile (const juce::String& text, const juce::String& fileName);
 void detectInstalled (Plugin&, const Layout&);
 juce::String typeFor (const juce::String& slug);
@@ -83,9 +84,19 @@ bool restoreMissing (const juce::File& backup, const Layout&, const juce::String
 // --- install
 struct Result { juce::String slug; bool ok = false; juce::String message; };
 using Log = std::function<void (const juce::String&)>;
-juce::Array<Result> installSelected (juce::Array<Plugin>& selected, const Layout&, Log log, Progress progress = {});
+// progress is batch-wide: done/total over the whole run. cancel is checked between files and during downloads;
+// anything not yet started is reported as "cancelled" and left untouched.
+juce::Array<Result> installSelected (juce::Array<Plugin>& selected, const Layout&, Log log, Progress progress = {},
+                                     const std::atomic<bool>* cancel = nullptr);
+
+// --- uninstall: removes only the plug-in's own .vst3 / .clap bundles found by detectInstalled, and only from the
+// layout's VST3/CLAP folders. Preset roots are snapshotted, never touched, verified (and restored) afterwards.
+bool isSafeToRemove (const juce::File& target, const Plugin&, const Layout&);
+juce::Array<Result> uninstallSelected (juce::Array<Plugin>& selected, const Layout&, Log log);
 
 // --- the hub's own update check (version.json with the mac block on macOS, GitHub release tag plugin-hub-v* as fallback)
 struct HubUpdate { bool available = false; juce::String version, page; };
 HubUpdate checkHubUpdate (Platform, const juce::String& releasesJson = {});
+// timeouts: kept short so a Refresh with no network finishes in seconds
+inline constexpr int kApiTimeoutMs = 8000, kSideTimeoutMs = 3000;
 }

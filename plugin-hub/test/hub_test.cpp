@@ -2,6 +2,7 @@
 // laid out like Windows and like macOS. Usage: PluginHubTest [win|mac|both] [workdir]
 #include "../src/HubCore.h"
 #include <iostream>
+#include <cstdlib>
 using juce::String; using juce::File;
 static int fails = 0;
 #define CHECK(c, what) do { bool ok_ = (c); std::cout << (ok_ ? "  PASS  " : "  FAIL  ") << what << std::endl; if (! ok_) ++fails; } while (0)
@@ -111,6 +112,62 @@ static void runPlatform (hub::Platform plat, const File& root)
     CHECK (treeHash (si->installedVst3) == siltV, "silt untouched after refused install");
     CHECK (! hub::isAllowedDownload ("https://github.com/cmplxtymusic/cmplxty-plugins/releases/download/mac-builds-6/x.pkg"), "mac-builds URL refused");
     CHECK (! hub::isAllowedDownload ("https://example.com/x.exe"), "foreign URL refused");
+
+    // F. cancel before start: nothing downloaded or changed
+    {
+        std::atomic<bool> stop { true };
+        juce::Array<hub::Plugin> s4 { *si };
+        auto r4 = hub::installSelected (s4, L, log, {}, &stop);
+        CHECK (r4.size() == 1 && ! r4[0].ok && r4[0].message == "cancelled", "cancel -> reported cancelled");
+        CHECK (treeHash (si->installedVst3) == siltV, "cancel -> silt untouched");
+    }
+    // G. batch-wide progress runs 0 -> 1000 without going backwards
+    {
+        juce::Array<hub::Plugin> s5 { *df, *si }; juce::int64 last = -1; bool mono = true;
+        hub::installSelected (s5, L, {}, [&] (juce::int64 d, juce::int64 t) { mono = mono && t == 1000 && d >= last; last = d; });
+        CHECK (mono && last == 1000, "batch progress monotonic, ends at 1000 (" + String (last) + ")");
+    }
+    // H. unreadable version -> shown as unknown, offered as reinstall (not a forced update)
+    {
+        auto mi = df->installedVst3.getChildFile ("Contents/Resources/moduleinfo.json"), ip = df->installedVst3.getChildFile ("Contents/Info.plist");
+        auto keep = mi.loadFileAsString(), keepP = ip.loadFileAsString(); bool hadP = ip.existsAsFile();
+        mi.deleteFile(); ip.deleteFile();
+        auto t2 = *df; hub::detectInstalled (t2, L);
+        if (hadP) ip.replaceWithText (keepP);
+        CHECK (t2.installed == "unknown" && t2.action() == hub::Action::Unknown, "missing version info -> unknown / REINSTALL (VERSION ?)");
+        mi.replaceWithText (keep);
+    }
+    // I. uninstall dr-fill: its bundles go, silt + presets stay
+    {
+        auto pre = hub::snapshot (L.presetRoots);
+        hub::detectInstalled (*df, L);
+        auto v3 = df->installedVst3, cl = df->installedClap;
+        CHECK (hub::isSafeToRemove (v3, *df, L) && hub::isSafeToRemove (cl, *df, L), "dr-fill bundles are removable");
+        CHECK (! hub::isSafeToRemove (si->installedVst3, *df, L), "silt bundle never removable as dr-fill");
+        CHECK (! hub::isSafeToRemove (L.presetRoots[0], *df, L), "preset folder never removable");
+        auto decoy = L.vst3Dirs[0].getSiblingFile ("CMPLXTY Dr Fill.vst3"); decoy.createDirectory();
+        CHECK (! hub::isSafeToRemove (decoy, *df, L), "same name outside the VST3 folders never removable");
+        juce::Array<hub::Plugin> s6 { *df };
+        auto r6 = hub::uninstallSelected (s6, L, log);
+        CHECK (r6.size() == 1 && r6[0].ok && ! v3.exists() && ! cl.exists() && decoy.exists(), "uninstall dr-fill removed VST3 + CLAP only");
+        CHECK (treeHash (si->installedVst3) == siltV && treeHash (si->installedClap) == siltC, "uninstall left silt alone");
+        CHECK (hub::diffMissingOrChanged (pre, hub::snapshot (L.presetRoots)).isEmpty(), "uninstall left presets intact");
+        juce::Array<hub::Plugin> cat3; hub::fetchCatalog (cat3, L, err, false);
+        CHECK (find (cat3, "dr-fill")->installed.isEmpty(), "dr-fill shows not installed after uninstall");
+        decoy.deleteRecursively();
+    }
+    // J. offline refresh is fast and falls back to the saved list
+    {
+        setenv ("https_proxy", "http://127.0.0.1:9", 1);
+        setenv ("HTTPS_PROXY", "http://127.0.0.1:9", 1);
+        auto t0 = juce::Time::getMillisecondCounter();
+        juce::Array<hub::Plugin> off; String e2;
+        bool ok = hub::fetchCatalog (off, L, e2);
+        auto ms = juce::Time::getMillisecondCounter() - t0;
+        unsetenv ("https_proxy"); unsetenv ("HTTPS_PROXY");
+        CHECK (ok && off.size() >= 18 && e2.contains ("offline"), "offline -> saved list used (" + e2 + ")");
+        CHECK (ms < 15000, "offline refresh took " + String ((int) ms) + " ms (< 15 s)");
+    }
 }
 
 int main (int argc, char** argv)
@@ -151,6 +208,8 @@ int main (int argc, char** argv)
         CHECK (lab ({ true, true, false, false }) == "Install / Update", "mix -> Install / Update");
         CHECK (lab ({ false, true, true, false }) == "Install / Update", "update + reinstall -> Install / Update");
         CHECK (lab ({ false, false, false, true }).isEmpty(), "no-checksum row never counts");
+        hub::Plugin k = n; k.installed = "unknown"; l.add (k);
+        CHECK (k.action() == hub::Action::Unknown && lab ({ false, false, false, false, true }) == "Install", "unknown version -> Install (reinstall), not Update");
     }
     if (which == "win" || which == "both") runPlatform (hub::Platform::Windows, work.getChildFile ("win"));
     if (which == "mac" || which == "both") runPlatform (hub::Platform::Mac, work.getChildFile ("mac"));
