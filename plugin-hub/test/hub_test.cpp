@@ -132,9 +132,14 @@ static void runPlatform (hub::Platform plat, const File& root)
         auto mi = df->installedVst3.getChildFile ("Contents/Resources/moduleinfo.json"), ip = df->installedVst3.getChildFile ("Contents/Info.plist");
         auto keep = mi.loadFileAsString(), keepP = ip.loadFileAsString(); bool hadP = ip.existsAsFile();
         mi.deleteFile(); ip.deleteFile();
+        // 1.0.3: on Windows the DLL's VERSIONINFO is now a fallback (the Quartz fix) -> take it away too, to get a truly unreadable bundle
+        juce::MemoryBlock keepDll; File dll;
+        if (plat == hub::Platform::Windows)
+            for (auto f : df->installedVst3.findChildFiles (File::findFiles, true, "*.vst3")) { dll = f; f.loadFileAsData (keepDll); f.replaceWithText ("no version here"); break; }
         auto t2 = *df; hub::detectInstalled (t2, L);
+        if (dll != File()) dll.replaceWithData (keepDll.getData(), keepDll.getSize());
         if (hadP) ip.replaceWithText (keepP);
-        CHECK (t2.installed == "unknown" && t2.action() == hub::Action::Unknown, "missing version info -> unknown / REINSTALL (VERSION ?)");
+        CHECK (t2.installed == "unknown" && t2.action() == hub::Action::Unknown, "missing version info -> unknown / REINSTALL (VERSION ?) [" + t2.installed + "]");
         mi.replaceWithText (keep);
     }
     // I. uninstall dr-fill: its bundles go, silt + presets stay
@@ -210,6 +215,26 @@ int main (int argc, char** argv)
         CHECK (lab ({ false, false, false, true }).isEmpty(), "no-checksum row never counts");
         hub::Plugin k = n; k.installed = "unknown"; l.add (k);
         CHECK (k.action() == hub::Action::Unknown && lab ({ false, false, false, false, true }) == "Install", "unknown version -> Install (reinstall), not Update");
+    }
+    {   // regression (Sam, Nov 5): Quartz's Windows bundle has no moduleinfo.json -> was "unknown"/REINSTALL (VERSION ?)
+        auto root = work.getChildFile ("quartz-pe"); root.deleteRecursively();
+        auto L = hub::Layout::prefix (root, hub::Platform::Windows);
+        auto dll = L.vst3Dirs[1].getChildFile ("Quartz.vst3/Contents/x86_64-win/Quartz.vst3");
+        dll.getParentDirectory().createDirectory();
+        auto u16 = [] (juce::MemoryOutputStream& o, const char* t) { for (; *t; ++t) { o.writeByte (*t); o.writeByte (0); } o.writeByte (0); o.writeByte (0); };
+        juce::MemoryOutputStream o; o.writeRepeatedByte ('M', 4096);
+        u16 (o, "FileVersion"); o.writeRepeatedByte (0, 2); u16 (o, "1.0.5");
+        u16 (o, "ProductVersion"); u16 (o, "1.0.5"); o.writeRepeatedByte (0, 512);
+        dll.replaceWithData (o.getData(), o.getDataSize());
+        hub::Plugin q; q.slug = "quartz"; q.bundle = "Quartz"; q.latest = "1.0.5";
+        hub::detectInstalled (q, L);
+        CHECK (q.installed == "1.0.5" && q.action() == hub::Action::Reinstall, "quartz (win, DLL only, no moduleinfo) reads " + q.installed + " -> REINSTALL, not VERSION ?");
+        q.latest = "1.0.6";
+        CHECK (q.action() == hub::Action::Update, "quartz 1.0.5 installed vs 1.0.6 -> UPDATE");
+        File real ("/tmp/q105/$0/Contents/x86_64-win/Quartz.vst3");
+        if (real.existsAsFile()) CHECK (hub::readPeVersion (real) == "1.0.5", "real Quartz 1.0.5 DLL from the released installer reads " + hub::readPeVersion (real));
+        CHECK (hub::readPeVersion (work.getChildFile ("nope.dll")).isEmpty(), "missing file -> empty");
+        root.deleteRecursively();
     }
     if (which == "win" || which == "both") runPlatform (hub::Platform::Windows, work.getChildFile ("win"));
     if (which == "mac" || which == "both") runPlatform (hub::Platform::Mac, work.getChildFile ("mac"));

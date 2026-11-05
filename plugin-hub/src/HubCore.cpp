@@ -1,3 +1,4 @@
+#include <string_view>
 #include "HubCore.h"
 #include <regex>
 #include <thread>
@@ -324,6 +325,30 @@ static String readPlistVersion (const File& bundle)
             .upToFirstOccurrenceOf ("</string>", false, false).trim().substring (0, 20);
 }
 
+// Windows: the DLL's VERSIONINFO resource (JUCE writes ProductVersion from the CMake VERSION). Quartz's Windows bundle
+// ships only the DLL (no moduleinfo.json), so without this it always read "unknown". Portable so it is testable anywhere.
+String readPeVersion (const File& binary)
+{
+    if (! binary.existsAsFile() || binary.getSize() > 256 * 1024 * 1024) return {};
+    juce::MemoryBlock mb; if (! binary.loadFileAsData (mb)) return {};
+    auto* d = static_cast<const char*> (mb.getData()); auto n = mb.getSize();
+    for (auto* key : { "ProductVersion", "FileVersion" })
+    {
+        std::string k16; for (auto* c = key; *c; ++c) { k16 += *c; k16 += '\0'; } k16.append (2, '\0');
+        std::string_view hay (d, n);
+        for (auto pos = hay.find (k16); pos != std::string_view::npos; pos = hay.find (k16, pos + 2))
+        {
+            auto s = pos + k16.size();
+            while (s + 1 < n && d[s] == 0 && d[s + 1] == 0) s += 2;            // DWORD padding
+            String v;
+            for (; s + 1 < n && (d[s] || d[s + 1]) && v.length() < 24; s += 2) v += (juce::juce_wchar) (uint8_t) d[s];
+            v = v.trim();
+            if (v.isNotEmpty() && v.containsOnly ("0123456789.")) return v;
+        }
+    }
+    return {};
+}
+
 void detectInstalled (Plugin& pl, const Layout& l)
 {
     pl.installed = {}; pl.installedVst3 = pl.installedClap = File();
@@ -336,6 +361,7 @@ void detectInstalled (Plugin& pl, const Layout& l)
         pl.installedVst3 = b;
         auto v = l.platform == Platform::Mac ? readPlistVersion (b) : String();
         if (v.isEmpty()) v = readModuleInfoVersion (b);
+        if (v.isEmpty() && l.platform == Platform::Windows) v = readPeVersion (b.isDirectory() ? b.getChildFile ("Contents/x86_64-win/" + n + ".vst3") : b);
         pl.installed = v.isNotEmpty() ? v : String ("unknown");
     }
     for (auto& d : l.clapDirs) for (auto& n : names)
@@ -345,7 +371,7 @@ void detectInstalled (Plugin& pl, const Layout& l)
         pl.installedClap = c;
         if (pl.installed.isEmpty())
         {
-            auto v = l.platform == Platform::Mac ? readPlistVersion (c) : String();
+            auto v = l.platform == Platform::Mac ? readPlistVersion (c) : readPeVersion (c);
             pl.installed = v.isNotEmpty() ? v : String ("unknown");
         }
     }

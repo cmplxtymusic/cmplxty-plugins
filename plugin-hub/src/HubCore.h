@@ -70,6 +70,7 @@ juce::Array<Plugin> parseReleases (const juce::String& releasesJson, Platform, j
 void applyVersionJson (Plugin&, const juce::String& versionJson, Platform);   // only if same release
 bool resolveChecksums (juce::Array<Plugin>&, juce::String& log);              // SHA256SUMS / .sha256 assets (parallel)
 juce::String parseSumsFile (const juce::String& text, const juce::String& fileName);
+juce::String readPeVersion (const juce::File& binary);
 void detectInstalled (Plugin&, const Layout&);
 juce::String typeFor (const juce::String& slug);
 bool fetchCatalog (juce::Array<Plugin>&, const Layout&, juce::String& error, bool withVersionJson = true);
