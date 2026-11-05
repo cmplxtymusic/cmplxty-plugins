@@ -8,7 +8,7 @@
 class VvitchProcessor final : public juce::AudioProcessor
 {
 public:
-    static constexpr int kBaseW = 1100, kBaseH = 800;
+    static constexpr int kBaseW = 1100, kBaseH = 1040;
     static constexpr const char* kShortName = "VVITCH";
 
     VvitchProcessor();
@@ -44,6 +44,11 @@ public:
     float outLevel() const noexcept { return engine.outPeak.load (std::memory_order_relaxed); }
     const vv::dsp::Engine& dspEngine() const noexcept { return engine; }
     vv::dsp::Params currentParams() const;
+    // 1.1.0 macros: 8 knobs with user-editable names (kept in the session state and in user presets)
+    static constexpr int kMacros = 8;
+    static const char* defaultMacroName (int m);
+    juce::String macroName (int m) const;
+    void setMacroName (int m, const juce::String& name);
     // on-screen keyboard / tests: queued notes, played on the audio thread at the next block
     void queueNote (int note, float vel) { uiMidi.push (note, vel); }
 
@@ -56,6 +61,8 @@ private:
     vv::dsp::Engine engine;
     std::vector<std::atomic<float>*> raw;
     std::vector<float> scratchR;
+    std::vector<juce::NormalisableRange<float>> ranges;
+    float mval (int i) const;   // value with the macro offsets applied
     float val (int i) const { return raw[(size_t) i]->load (std::memory_order_relaxed); }
     void handleMidi (const juce::MidiMessage&);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VvitchProcessor)

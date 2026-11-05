@@ -7,7 +7,7 @@ namespace vvui
 const PanelSpec& panelSpec()
 {
     // 5 rows of 114 px under a 110 px display; x runs 16..1084
-    constexpr int r1 = 176, r2 = 296, r3 = 416, r4 = 536, r5 = 656, h = 114;
+    constexpr int r1 = 176, r2 = 296, r3 = 416, r4 = 536, r5 = 656, r6 = 776, r7 = 896, h = 114;
     static const PanelSpec s {
         "VVitch", "WITCH HOUSE POLYSYNTH  /  CHIP  /  TAPE  /  DRAG",
         { 16, 58, 1068, 110 },
@@ -34,6 +34,12 @@ const PanelSpec& panelSpec()
 
             { "Delay", nullptr, { 16, r5, 340, h },         { { 'k', "dlyTime", "TIME" }, { 'k', "dlyFb", "FEEDBACK" }, { 'k', "dlyMix", "MIX" } } },
             { "Reverb", nullptr, { 364, r5, 340, h },       { { 'k', "revSize", "SIZE" }, { 'k', "revDark", "DARK" }, { 'k', "revMix", "MIX" } } },
+            // 1.1.0: FX RACK (inserts after chip / tape, before delay + reverb) and 8 nameable macros
+            { "FX 1", nullptr, { 16, r6, 260, h }, { { 'k', "fx1A", "A" }, { 'k', "fx1B", "B" }, { 'k', "fx1Mix", "MIX" }, { 'c', "fx1Type", "TYPE" } }, 96 },
+            { "FX 2", nullptr, { 286, r6, 260, h }, { { 'k', "fx2A", "A" }, { 'k', "fx2B", "B" }, { 'k', "fx2Mix", "MIX" }, { 'c', "fx2Type", "TYPE" } }, 96 },
+            { "FX 3", nullptr, { 556, r6, 260, h }, { { 'k', "fx3A", "A" }, { 'k', "fx3B", "B" }, { 'k', "fx3Mix", "MIX" }, { 'c', "fx3Type", "TYPE" } }, 96 },
+            { "FX 4", nullptr, { 826, r6, 260, h }, { { 'k', "fx4A", "A" }, { 'k', "fx4B", "B" }, { 'k', "fx4Mix", "MIX" }, { 'c', "fx4Type", "TYPE" } }, 96 },
+            { "Macros", nullptr, { 16, r7, 1068, h }, { { 'k', "macro1", "M1" }, { 'k', "macro2", "M2" }, { 'k', "macro3", "M3" }, { 'k', "macro4", "M4" }, { 'k', "macro5", "M5" }, { 'k', "macro6", "M6" }, { 'k', "macro7", "M7" }, { 'k', "macro8", "M8" } } },
         },
         "cutoff"
     };

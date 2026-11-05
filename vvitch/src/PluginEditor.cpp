@@ -516,6 +516,29 @@ void Panel::timerCallback()
     if (proc.presets.changeCount() != lastPresetChange || presetBtn.getButtonText() != proc.presets.currentName()) refreshPresetName();
     const bool showBar = ! banner.isVisible();
     for (auto* b : { &presetPrev, &presetBtn, &presetNext }) if (b->isVisible() != showBar) b->setVisible (showBar);
+    refreshRackLabels();
+}
+
+// FX slot knob labels follow the slot type; macro labels show the (user-editable) macro names.
+void Panel::refreshRackLabels()
+{
+    for (int n = 1; n <= vv::fx::kSlots; ++n)
+    {
+        const int type = (int) proc.apvts.getRawParameterValue ("fx" + juce::String (n) + "Type")->load();
+        if (auto* k = knobFor ("fx" + juce::String (n) + "A")) if (k->label.getText() != vv::fx::labelA (type)) k->label.setText (vv::fx::labelA (type), juce::dontSendNotification);
+        if (auto* k = knobFor ("fx" + juce::String (n) + "B")) if (k->label.getText() != vv::fx::labelB (type)) k->label.setText (vv::fx::labelB (type), juce::dontSendNotification);
+    }
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+        if (auto* k = knobFor ("macro" + juce::String (m + 1)))
+        {
+            if (! k->label.isBeingEdited() && k->label.getText() != proc.macroName (m)) k->label.setText (proc.macroName (m), juce::dontSendNotification);
+            if (! k->label.isEditableOnDoubleClick())
+            {
+                k->label.setEditable (false, true, false);
+                k->label.setTooltip ("Double-click to rename this macro");
+                k->label.onTextChange = [this, m, k] { proc.setMacroName (m, k->label.getText()); k->label.setText (proc.macroName (m), juce::dontSendNotification); hostkeys::releaseLater (*this); };
+            }
+        }
 }
 
 void Panel::refreshPresetName()

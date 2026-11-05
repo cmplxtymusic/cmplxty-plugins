@@ -65,13 +65,76 @@ const vv::PDef kParams[] = {
     { "revDark",  "Reverb Darkness",  'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.6f, "%" },
     { "revMix",   "Reverb Mix",       'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.2f, "%" },
     { "volume",   "Volume",           'f', -36.0f, 6.0f, 0.1f, 1.0f, -6.0f, "dB" },
+    // 1.1.0: FX RACK (4 insert slots) and 8 macros. Appended so existing parameter indices / host automation stay put.
+    { "fx1Type",   "FX 1 Type",        'c', 0, 7, 1, 1, 0.0f, "", "Off|Chorus|Phaser|Flanger|Distortion|Compressor|Tilt EQ|Widener" },
+    { "fx1A",      "FX 1 A",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx1B",      "FX 1 B",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx1Mix",    "FX 1 Mix",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx2Type",   "FX 2 Type",        'c', 0, 7, 1, 1, 0.0f, "", "Off|Chorus|Phaser|Flanger|Distortion|Compressor|Tilt EQ|Widener" },
+    { "fx2A",      "FX 2 A",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx2B",      "FX 2 B",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx2Mix",    "FX 2 Mix",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx3Type",   "FX 3 Type",        'c', 0, 7, 1, 1, 0.0f, "", "Off|Chorus|Phaser|Flanger|Distortion|Compressor|Tilt EQ|Widener" },
+    { "fx3A",      "FX 3 A",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx3B",      "FX 3 B",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx3Mix",    "FX 3 Mix",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx4Type",   "FX 4 Type",        'c', 0, 7, 1, 1, 0.0f, "", "Off|Chorus|Phaser|Flanger|Distortion|Compressor|Tilt EQ|Widener" },
+    { "fx4A",      "FX 4 A",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx4B",      "FX 4 B",           'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "fx4Mix",    "FX 4 Mix",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, "%" },
+    { "macro1",   "Macro 1",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro2",   "Macro 2",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro3",   "Macro 3",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro4",   "Macro 4",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro5",   "Macro 5",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro6",   "Macro 6",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro7",   "Macro 7",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
+    { "macro8",   "Macro 8",          'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, "%" },
 };
 enum I { w1, oct1, lvl1, w2, semi2, fine2, lvl2, pw, pwm, pwmRate, uni, detune, width, noise, noiseTone, vox, vowel, voxMove,
          fType, cutoff, reso, drive, fEnv, fKey, fA, fD, fS, ampA, ampD, ampS, ampR, drop, dropTime, drag, dragAmt, wow, flutter, age,
          bits, crushHz, chipMix, lfoShape, lfoRate, lfoCut, lfoPitch, arp, arpMode, arpDiv, arpOct, arpGate, voices, glide,
-         dlyTime, dlyFb, dlyMix, revSize, revDark, revMix, volume, kNumParams };
+         dlyTime, dlyFb, dlyMix, revSize, revDark, revMix, volume,
+         fx1Type, fx1A, fx1B, fx1Mix, fx2Type, fx2A, fx2B, fx2Mix, fx3Type, fx3A, fx3B, fx3Mix, fx4Type, fx4A, fx4B, fx4Mix,
+         macro1, macro2, macro3, macro4, macro5, macro6, macro7, macro8, kNumParams };
 static_assert (sizeof (kParams) / sizeof (kParams[0]) == kNumParams, "parameter table and index enum disagree");
+// Macros: each one pushes a fixed set of targets by a normalised (0..1 of the knob's travel) amount, ON TOP of whatever the
+// preset stores. Nothing stored is changed, so every factory and user preset (old or new) responds to all eight macros.
+struct MacroTarget { int param; float depth; };
+const std::vector<MacroTarget>& macroTargets (int m)
+{
+    static const std::vector<MacroTarget> t[VvitchProcessor::kMacros] = {
+        { { cutoff, 0.35f }, { reso, 0.2f } },                                  // Bright
+        { { revMix, 0.5f }, { revSize, 0.3f }, { dlyMix, 0.3f } },              // Space
+        { { wow, 0.5f }, { flutter, 0.4f }, { age, 0.6f } },                    // Tape
+        { { chipMix, 0.8f }, { bits, -0.6f }, { crushHz, -0.5f } },             // Crush
+        { { drop, -0.25f } },                                                   // Drop (down to -12 st)
+        { { lfoCut, 0.4f }, { voxMove, 0.5f }, { vox, 0.3f } },                 // Motion
+        { { detune, 0.3f }, { width, 0.5f } },                                  // Width
+        { { fx1Mix, 0.6f }, { fx2Mix, 0.6f }, { fx3Mix, 0.6f }, { fx4Mix, 0.6f } } // FX
+    };
+    return t[juce::jlimit (0, VvitchProcessor::kMacros - 1, m)];
+}
 } // namespace
+
+const char* VvitchProcessor::defaultMacroName (int m)
+{
+    static const char* n[kMacros] = { "BRIGHT", "SPACE", "TAPE", "CRUSH", "DROP", "MOTION", "WIDTH", "FX" };
+    return n[juce::jlimit (0, kMacros - 1, m)];
+}
+juce::String VvitchProcessor::macroName (int m) const
+{
+    const auto parts = juce::StringArray::fromTokens (apvts.state.getProperty ("macroNames").toString(), "|", "");
+    const auto s = m >= 0 && m < parts.size() ? parts[m].trim() : juce::String();
+    return s.isNotEmpty() ? s : juce::String (defaultMacroName (m));
+}
+void VvitchProcessor::setMacroName (int m, const juce::String& name)
+{
+    if (m < 0 || m >= kMacros) return;
+    juce::StringArray parts; for (int i = 0; i < kMacros; ++i) parts.add (macroName (i));
+    parts.set (m, name.removeCharacters ("|").trim().substring (0, 16));
+    apvts.state.setProperty ("macroNames", parts.joinIntoString ("|"), nullptr);
+}
 
 VvitchProcessor::VvitchProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -79,6 +142,29 @@ VvitchProcessor::VvitchProcessor()
       presets (apvts, &undoManager, "VVITCH")
 {
     for (auto& d : kParams) raw.push_back (apvts.getRawParameterValue (d.id));
+    for (auto& d : kParams) ranges.push_back (apvts.getParameterRange (d.id));
+    // macro names travel with user presets; a factory preset (nullptr) restores the default names
+    presets.saveExtra = [this] (juce::XmlElement& x) { for (int m = 0; m < kMacros; ++m) x.setAttribute ("macro" + juce::String (m + 1), macroName (m)); };
+    presets.loadExtra = [this] (const juce::XmlElement* x)
+    {
+        juce::StringArray parts;
+        for (int m = 0; m < kMacros; ++m) parts.add (x != nullptr ? x->getStringAttribute ("macro" + juce::String (m + 1), defaultMacroName (m)) : juce::String (defaultMacroName (m)));
+        apvts.state.setProperty ("macroNames", parts.joinIntoString ("|"), nullptr);
+    };
+}
+
+float VvitchProcessor::mval (int i) const
+{
+    float off = 0;
+    for (int m = 0; m < kMacros; ++m)
+    {
+        const float a = val (macro1 + m);
+        if (a <= 0.0f) continue;
+        for (auto& t : macroTargets (m)) if (t.param == i) off += a * t.depth;
+    }
+    if (off == 0.0f) return val (i);
+    const auto& r = ranges[(size_t) i];
+    return r.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, r.convertTo0to1 (r.snapToLegalValue (val (i))) + off));
 }
 
 bool VvitchProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -94,23 +180,28 @@ vv::dsp::Params VvitchProcessor::currentParams() const
     using namespace vv::dsp;
     Params p;
     auto ci = [this] (int i, int hi) { return juce::jlimit (0, hi, (int) val (i)); };
-    p.w1 = ci (w1, 3); p.oct1 = (float) juce::roundToInt (val (oct1)); p.lvl1 = val (lvl1);
-    p.w2 = ci (w2, 3); p.semi2 = val (semi2); p.fine2 = val (fine2); p.lvl2 = val (lvl2);
-    p.pw = val (pw); p.pwm = val (pwm); p.pwmRate = val (pwmRate);
-    p.uni = juce::jlimit (1, kMaxUni, juce::roundToInt (val (uni))); p.detune = val (detune); p.width = val (width);
-    p.noise = val (noise); p.noiseTone = val (noiseTone); p.vox = val (vox); p.vowel = val (vowel); p.voxMove = val (voxMove);
-    p.fType = (FilterType) ci (fType, 3); p.cutoff = val (cutoff); p.reso = val (reso); p.drive = val (drive); p.fEnv = val (fEnv); p.fKey = val (fKey);
-    p.fA = val (fA) / 1000.0f; p.fD = val (fD) / 1000.0f; p.fS = val (fS);
-    p.aA = val (ampA) / 1000.0f; p.aD = val (ampD) / 1000.0f; p.aS = val (ampS); p.aR = val (ampR) / 1000.0f;
-    p.drop = val (drop); p.dropTime = val (dropTime) / 1000.0f; p.drag = val (drag) > 0.5f; p.dragAmt = val (dragAmt);
-    p.wow = val (wow); p.flutter = val (flutter); p.age = val (age);
-    p.bits = val (bits); p.crushHz = val (crushHz); p.chipMix = val (chipMix);
-    p.lfoShape = ci (lfoShape, 4); p.lfoRate = val (lfoRate); p.lfoCut = val (lfoCut); p.lfoPitch = val (lfoPitch);
-    p.arp = val (arp) > 0.5f; p.arpMode = ci (arpMode, 4); p.arpDiv = ci (arpDiv, 5); p.arpOct = juce::jlimit (1, 4, juce::roundToInt (val (arpOct))); p.arpGate = val (arpGate);
-    p.voices = juce::jlimit (1, kMaxVoices, juce::roundToInt (val (voices))); p.glide = val (glide) / 1000.0f;
-    p.dlyTime = val (dlyTime) / 1000.0f; p.dlyFb = val (dlyFb); p.dlyMix = val (dlyMix);
-    p.revSize = val (revSize); p.revDark = val (revDark); p.revMix = val (revMix); p.volumeDb = val (volume);
+    p.w1 = ci (w1, 3); p.oct1 = (float) juce::roundToInt (mval (oct1)); p.lvl1 = mval (lvl1);
+    p.w2 = ci (w2, 3); p.semi2 = mval (semi2); p.fine2 = mval (fine2); p.lvl2 = mval (lvl2);
+    p.pw = mval (pw); p.pwm = mval (pwm); p.pwmRate = mval (pwmRate);
+    p.uni = juce::jlimit (1, kMaxUni, juce::roundToInt (mval (uni))); p.detune = mval (detune); p.width = mval (width);
+    p.noise = mval (noise); p.noiseTone = mval (noiseTone); p.vox = mval (vox); p.vowel = mval (vowel); p.voxMove = mval (voxMove);
+    p.fType = (FilterType) ci (fType, 3); p.cutoff = mval (cutoff); p.reso = mval (reso); p.drive = mval (drive); p.fEnv = mval (fEnv); p.fKey = mval (fKey);
+    p.fA = mval (fA) / 1000.0f; p.fD = mval (fD) / 1000.0f; p.fS = mval (fS);
+    p.aA = mval (ampA) / 1000.0f; p.aD = mval (ampD) / 1000.0f; p.aS = mval (ampS); p.aR = mval (ampR) / 1000.0f;
+    p.drop = mval (drop); p.dropTime = mval (dropTime) / 1000.0f; p.drag = mval (drag) > 0.5f; p.dragAmt = mval (dragAmt);
+    p.wow = mval (wow); p.flutter = mval (flutter); p.age = mval (age);
+    p.bits = mval (bits); p.crushHz = mval (crushHz); p.chipMix = mval (chipMix);
+    p.lfoShape = ci (lfoShape, 4); p.lfoRate = mval (lfoRate); p.lfoCut = mval (lfoCut); p.lfoPitch = mval (lfoPitch);
+    p.arp = mval (arp) > 0.5f; p.arpMode = ci (arpMode, 4); p.arpDiv = ci (arpDiv, 5); p.arpOct = juce::jlimit (1, 4, juce::roundToInt (mval (arpOct))); p.arpGate = mval (arpGate);
+    p.voices = juce::jlimit (1, kMaxVoices, juce::roundToInt (mval (voices))); p.glide = mval (glide) / 1000.0f;
+    p.dlyTime = mval (dlyTime) / 1000.0f; p.dlyFb = mval (dlyFb); p.dlyMix = mval (dlyMix);
+    p.revSize = mval (revSize); p.revDark = mval (revDark); p.revMix = mval (revMix); p.volumeDb = mval (volume);
     p.bpm = (float) hostBpm.load (std::memory_order_relaxed);
+    for (int k = 0; k < vv::fx::kSlots; ++k)
+    {
+        auto& f = p.fx[(size_t) k]; const int b0 = fx1Type + 4 * k;
+        f.type = ci (b0, vv::fx::kNumTypes - 1); f.a = mval (b0 + 1); f.b = mval (b0 + 2); f.mix = mval (b0 + 3);
+    }
     return p;
 }
 

@@ -142,6 +142,7 @@ public:
     // hooks for the screenshot / test harness and for the plug-in's display
     void demoBanner (const vv::upd::Info& i) { showBanner (i); }
     void demoKnobMenu();
+    void refreshRackLabels();
     juce::String auditKeyboard();
     juce::String auditMenus();   // right-click path with a fake host context menu / without one
     juce::String auditPresets(); // preset bar: prev / next / menu, every factory preset, user save + load round trip

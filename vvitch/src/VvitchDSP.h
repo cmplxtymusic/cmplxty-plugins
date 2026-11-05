@@ -5,6 +5,7 @@
 //        Pitch: glide, a per-note pitch drop, the DRAG mode (everything pitched down and slowed, chopped-and-screwed style), LFO / wheel vibrato.
 // Global: arpeggiator (up / down / up-down / random / chop), CHIP stage (bit depth + sample-rate crush), TAPE (wow, flutter, age),
 //         dark ping-pong delay, dark 8-line FDN reverb, volume and a peak limiter that keeps the output under -0.5 dBFS.
+#include "FxRack.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -138,6 +139,7 @@ struct Params
     int voices = 8; float glide = 0, bpm = 120;
     float dlyTime = 0.375f, dlyFb = 0.35f, dlyMix = 0, revSize = 0.6f, revMix = 0.2f, revDark = 0.6f;
     float volumeDb = -6, bendRange = 2;
+    std::array<fx::SlotParams, fx::kSlots> fx {};   // 1.1.0 FX RACK (inserts before delay / reverb)
 };
 
 // ---------------------------------------------------------------- engine
@@ -154,6 +156,7 @@ public:
     void prepare (double sampleRate)
     {
         sr = (float) sampleRate;
+        rack.prepare (sr);
         tapeL.assign (4096, 0.0f); tapeR.assign (4096, 0.0f);
         dlyL.assign ((size_t) (sr * 2.6f) + 4, 0.0f); dlyR.assign (dlyL.size(), 0.0f);
         static const int base[8] = { 1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116 };
@@ -169,11 +172,12 @@ public:
         std::fill (dlyL.begin(), dlyL.end(), 0.0f); std::fill (dlyR.begin(), dlyR.end(), 0.0f); dlyW = 0; dlyLp[0] = dlyLp[1] = 0;
         for (auto& l : rv) { std::fill (l.buf.begin(), l.buf.end(), 0.0f); l.w = 0; l.lp = 0; }
         crushPh = 1; crushL = crushR = 0; ageL = ageR = 0; wowPh = flPh = 0; wowRnd = wowRndT = 0; lim = 1; arpOn = false; arpCtr = 0; arpIdx = -1; arpDir = 1; arpPlaying.clear();
-        dTime = -1;
+        dTime = -1; rack.reset();
     }
     void setParams (const Params& np)
     {
         P = np;
+        rack.setup (P.fx);
         P.uni = std::clamp (P.uni, 1, kMaxUni); P.voices = std::clamp (P.voices, 1, kMaxVoices);
         P.bits = std::clamp (P.bits, 2.0f, 16.0f); P.crushHz = std::clamp (P.crushHz, 200.0f, 48000.0f);
         P.bpm = std::clamp (P.bpm, 20.0f, 400.0f); P.arpOct = std::clamp (P.arpOct, 1, 4);
@@ -493,6 +497,7 @@ private:
                     r = std::tanh (ageR * sat) / sat * (1.0f + P.age * 0.6f) + tapeRng.next() * P.age * 0.003f;
                 }
             }
+            if (rack.active()) rack.process (l, r);
             if (dly)
             {
                 dTime += (dTarget - dTime) * 0.0005f;
@@ -539,6 +544,7 @@ private:
     }
 
     Params P;
+    fx::Rack rack;
     float sr = 48000;
     std::array<Voice, kMaxVoices> voice;
     std::vector<int> stack, held, arpPlaying, arpSeq;

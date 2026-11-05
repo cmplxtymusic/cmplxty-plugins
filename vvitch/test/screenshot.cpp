@@ -52,7 +52,7 @@ int procTests()
     {
         VvitchProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         check (proc.getTotalNumInputChannels() == 0 && proc.getTotalNumOutputChannels() == 2 && proc.acceptsMidi() && proc.getLatencySamples() == 0, "synth: no audio in, stereo out, MIDI in, zero latency");
-        check (proc.getParameters().size() == 59 && v (proc, "voices") == 8.0f && std::fabs (v (proc, "cutoff") - 3000.0f) < 1.0f, "59 parameters with defaults (8 voices, 3 kHz cutoff)");
+        check (proc.getParameters().size() == 83 && v (proc, "voices") == 8.0f && std::fabs (v (proc, "cutoff") - 3000.0f) < 1.0f, "83 parameters with defaults (8 voices, 3 kHz cutoff)");
         check (proc.apvts.getParameter ("uni")->getText (proc.apvts.getParameter ("uni")->convertTo0to1 (5.0f), 20) == "5"
                && proc.apvts.getParameter ("w1")->getText (proc.apvts.getParameter ("w1")->convertTo0to1 (2.0f), 20) == "PWM", "unison shows whole numbers, wave names shown");
         auto y = render (proc, 20, {});
@@ -166,6 +166,58 @@ int procTests()
         check (b.uiWidth == 1320 && b.uiHeight == 888, "window size survives save / load");
         const char junk[] = "not a state"; b.setStateInformation (junk, sizeof junk);
         check (v (b, "fType") == 3, "garbage state ignored");
+    }
+    {   // 1.1.0: macros move their targets on EVERY factory preset, without touching stored values
+        VvitchProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+        int moved = 0, n = proc.presets.numFactory();
+        for (int i = 0; i < n; ++i)
+        {
+            proc.presets.loadFactory (i);
+            const auto a = proc.currentParams(); const float storedCut = v (proc, "cutoff");
+            set (proc, "macro1", 1.0f); set (proc, "macro2", 1.0f); set (proc, "macro7", 1.0f);
+            const auto b = proc.currentParams();
+            if ((b.cutoff > a.cutoff || a.cutoff >= 19999.0f) && b.revMix > a.revMix - 1e-6f && b.width >= a.width && (b.revMix > a.revMix || a.revMix >= 0.999f) && std::fabs (v (proc, "cutoff") - storedCut) < 1e-3f) ++moved;
+        }
+        check (moved == n, "macros BRIGHT / SPACE / WIDTH push every factory preset, stored values unchanged");
+        proc.presets.loadFactory (1);
+        check (v (proc, "macro1") == 0.0f, "loading a preset resets the macro knobs");
+        set (proc, "macro5", 1.0f); check (std::fabs (proc.currentParams().drop - (v (proc, "drop") - 12.0f)) < 0.2f, "macro DROP: -12 st at full");
+        set (proc, "macro5", 0.0f);
+        // names: editable, in the session state, in user presets; factory presets restore the defaults
+        check (proc.macroName (0) == "BRIGHT" && proc.macroName (7) == "FX", "default macro names");
+        proc.setMacroName (0, "Shine|x"); check (proc.macroName (0) == "Shinex", "rename a macro ('|' stripped)");
+        juce::MemoryBlock mb; proc.getStateInformation (mb);
+        VvitchProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (p2.macroName (0) == "Shinex" && p2.macroName (1) == "SPACE", "macro names survive the session state");
+        auto f = juce::File::createTempFile (".cmplxtypreset");
+        proc.presets.saveFile (f, "macro test"); proc.presets.loadFactory (2);
+        check (proc.macroName (0) == "BRIGHT", "a factory preset restores the default names");
+        proc.presets.loadFile (f); check (proc.macroName (0) == "Shinex", "a user preset carries its macro names");
+        f.deleteFile();
+    }
+    {   // 1.1.0: FX RACK: off = bit-identical bypass; every type renders finite, non-silent audio; mix 0 = bypass
+        auto run = [&] (int type, float mix)
+        {
+            VvitchProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+            set (proc, "revMix", 0.0f); set (proc, "dlyMix", 0.0f);
+            if (type > 0) { set (proc, "fx1Type", (float) type); set (proc, "fx1Mix", mix); set (proc, "fx1A", 0.7f); set (proc, "fx1B", 0.7f); }
+            return render (proc, 100, { { 0, on (48) }, { 30000, off (48) } });
+        };
+        const auto dry = run (0, 0);
+        bool ok = true; juce::String bad;
+        for (int t = 1; t < vv::fx::kNumTypes; ++t)
+        {
+            const auto w = run (t, 1.0f); bool fin = true; double d = 0;
+            for (size_t i = 0; i < w.size(); ++i) { fin &= std::isfinite (w[i]) && std::fabs (w[i]) < 4.0f; d = std::max (d, (double) std::fabs (w[i] - dry[i])); }
+            if (! fin || rmsOf (w, 2000) < 1e-3 || d < 1e-4) { ok = false; bad << vv::fx::typeName (t) << " "; }
+            const auto z = run (t, 0.0f); double dz = 0; for (size_t i = 0; i < z.size(); ++i) dz = std::max (dz, (double) std::fabs (z[i] - dry[i]));
+            if (dz > 1e-6) { ok = false; bad << vv::fx::typeName (t) << "(mix0) "; }
+        }
+        std::printf ("  fx types bad: %s\n", bad.toRawUTF8());
+        check (ok, "FX RACK: all 7 types change the sound, stay finite; mix 0 is a bypass");
+        int withFx = 0; VvitchProcessor proc;
+        for (int i = 0; i < proc.presets.numFactory(); ++i) { proc.presets.loadFactory (i); withFx += proc.currentParams().fx[0].type > 0 ? 1 : 0; }
+        check (withFx >= 16 && proc.presets.numFactory() >= 65, ">= 64 factory presets, >= 16 of them use the FX rack");
     }
     std::printf (fails == 0 ? "PROC TESTS PASSED\n" : "%d PROC TEST(S) FAILED\n", fails);
     return fails;
