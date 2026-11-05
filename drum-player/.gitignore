@@ -5,3 +5,4 @@ test/dsp_test
 *.zip
 *.exe
 PROGRESS.md
+ext/

@@ -113,7 +113,31 @@ inline const Smp& builtIn (int i)
 }
 
 struct PadP { int sound = 0; float tune = 0, decay = kDecayFull, pan = 0, levelDb = 0; int choke = 0; };
-struct Params { std::array<PadP, kPads> pad {}; float volumeDb = -3, velSens = 0.7f, kitTune = 0; int baseNote = 36; };
+struct Params { std::array<PadP, kPads> pad {}; float volumeDb = -3, velSens = 0.7f, kitTune = 0; int baseNote = 36; bool gm = false; };
+
+// 1.1.0 FPC / General MIDI note map (FL Studio's FPC default layout uses the same notes). The 8 pads keep their roles from 1.0
+// (kick, snare, clap, closed hat, open hat, tom, rim, crash) so every kit still works; the extra GM notes land on the nearest pad,
+// toms 41 / 45 / 48 (and 43 / 47 / 50) all play the tom pad at rising pitch, ride 51 plays the cymbal pad pitched up.
+struct GmHit { int pad = -1; float st = 0; };
+inline GmHit gmMap (int note)
+{
+    switch (note)
+    {
+        case 35: case 36: return { 0, 0 };                  // kick
+        case 38: case 40: return { 1, 0 };                  // snare
+        case 39:          return { 2, 0 };                  // clap
+        case 42: case 44: return { 3, 0 };                  // closed / pedal hat
+        case 46:          return { 4, 0 };                  // open hat
+        case 41: return { 5, 0 }; case 43: return { 5, 2 }; case 45: return { 5, 4 };
+        case 47: return { 5, 5 }; case 48: return { 5, 7 }; case 50: return { 5, 9 };   // toms low -> high
+        case 37:          return { 6, 0 };                  // rim / side stick
+        case 49: case 57: case 52: case 55: return { 7, 0 };   // crash
+        case 51: case 59: case 53: return { 7, 5 };         // ride (cymbal pad, pitched up)
+        default: return {};
+    }
+}
+inline int gmPadNote (int pad) { static const int n[kPads] = { 36, 38, 39, 42, 46, 41, 37, 49 }; return pad >= 0 && pad < kPads ? n[pad] : -1; }
+inline const char* gmPadLabel (int pad) { static const char* n[kPads] = { "KICK 36", "SNARE 38", "CLAP 39", "CL HAT 42", "OP HAT 46", "TOMS 41/45/48", "RIM 37", "CRASH 49 RIDE 51" }; return pad >= 0 && pad < kPads ? n[pad] : ""; }
 
 class Engine
 {
@@ -130,10 +154,11 @@ public:
         for (auto& v : voices) if (v.on && v.pad == pad && v.s == user[(size_t) pad]) v.on = false;
         user[(size_t) pad] = s;
     }
-    int padForNote (int note) const { const int p = note - P.baseNote; return p >= 0 && p < kPads ? p : -1; }
+    int padForNote (int note) const { if (P.gm) return gmMap (note).pad; const int p = note - P.baseNote; return p >= 0 && p < kPads ? p : -1; }
 
-    void noteOn (int note, float vel) { trigger (padForNote (note), vel); }
-    void trigger (int pad, float vel)
+    void noteOn (int note, float vel) { if (P.gm) noteOnGm (note, vel); else trigger (padForNote (note), vel); }
+    void noteOnGm (int note, float vel) { const auto h = gmMap (note); trigger (h.pad, vel, h.st); }   // pattern playback: always GM
+    void trigger (int pad, float vel, float extraSt = 0)
     {
         if (pad < 0 || vel <= 0) return;
         const auto& pp = P.pad[(size_t) pad];
@@ -148,7 +173,7 @@ public:
         auto& v = *slot;
         v = Voice {};
         v.on = true; v.pad = pad; v.s = s; v.pos = 0; v.age = ++clock;
-        v.inc = s->rate / sr * std::pow (2.0, (double) (pp.tune + P.kitTune) / 12.0);
+        v.inc = s->rate / sr * std::pow (2.0, (double) (pp.tune + P.kitTune + extraSt) / 12.0);
         const float g = std::pow (10.0f, pp.levelDb / 20.0f) * (1.0f - P.velSens + P.velSens * std::clamp (vel, 0.0f, 1.0f));
         const float th = (std::clamp (pp.pan, -1.0f, 1.0f) + 1.0f) * 0.78539816f;
         v.gL = g * std::cos (th) * 1.41421356f; v.gR = g * std::sin (th) * 1.41421356f;

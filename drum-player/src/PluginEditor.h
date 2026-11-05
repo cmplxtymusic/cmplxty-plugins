@@ -118,7 +118,8 @@ struct PanelSpec
 const PanelSpec& panelSpec();
 class Panel;
 std::unique_ptr<juce::Component> makeDisplay (DrumPlayerProcessor&, Panel&);
-void demoDisplay (juce::Component*);   // screenshot helper: fill the display with demo data
+void demoDisplay (juce::Component*);
+juce::File exportChip (juce::Component*, int chip, juce::String& err);   // test hook: the file a drag-out chip would drag (0 = MIDI, 1.. = audio parts)   // screenshot helper: fill the display with demo data
 
 // The whole interface, laid out at a fixed base size and scaled by the editor (so the window can be resized freely).
 class Panel final : public juce::Component, private juce::Timer

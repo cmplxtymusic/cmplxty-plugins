@@ -17,6 +17,7 @@ public:
     static constexpr const char* kExt = ".cmplxtypreset";
     std::function<void (juce::XmlElement&)> saveExtra;            // optional: extra non-parameter data (e.g. sample kits)
     std::function<void (const juce::XmlElement*)> loadExtra;
+    std::function<bool (const juce::String&)> keep;               // optional: parameters a preset load leaves alone
 
     PresetManager (juce::AudioProcessorValueTreeState& s, juce::UndoManager* um, juce::String pluginName)
         : apvts (s), undo (um), plugin (std::move (pluginName)) {}
@@ -41,7 +42,7 @@ public:
         for (auto& v : f[(size_t) i].values) m[v.first] = v.second;
         beginLoad();
         for (auto* prm : apvts.processor.getParameters())
-            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && ! (keep && keep (r->getParameterID())))
             {
                 auto it = m.find (r->getParameterID());
                 set (*r, it != m.end() ? r->convertTo0to1 (it->second) : r->getDefaultValue());
@@ -58,7 +59,7 @@ public:
         if (xml == nullptr || ! xml->hasTagName ("CMPLXTY_PRESET") || xml->getStringAttribute ("plugin") != plugin) return false;
         beginLoad();
         for (auto* prm : apvts.processor.getParameters())
-            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm); r != nullptr && ! (keep && keep (r->getParameterID())))
             {
                 float v = r->getDefaultValue();
                 for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))

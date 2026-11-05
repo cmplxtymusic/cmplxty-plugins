@@ -801,6 +801,12 @@ void Panel::resized()
                 juce::Rectangle<int> r (kx, body.getY(), kw, body.getHeight()); kx += kw;
                 k.label.setBounds (r.removeFromTop (16)); k.slider.setBounds (r);
             }
+            else if (nk == 0)   // no knobs: side controls side by side across the section
+            {
+                const int cw = body.getWidth() / nside; juce::Rectangle<int> r (kx, body.getCentreY() - 22, cw, 44); kx += cw; r = r.reduced (6, 0);
+                if (c.kind == 'c') { auto& k = *combos[ci++]; k.label.setBounds (r.getX(), r.getY(), r.getWidth(), 15); k.box.setBounds (r.getX(), r.getY() + 16, r.getWidth(), 24); }
+                else { auto& k = *togs[ti++]; k.label.setBounds (r.getX(), r.getY(), r.getWidth(), 15); k.button.setBounds (r.getX(), r.getY() + 20, 42, 18); }
+            }
             else if (c.kind == 'c')
             {
                 auto& k = *combos[ci++];
@@ -952,7 +958,7 @@ DrumPlayerEditor::DrumPlayerEditor (DrumPlayerProcessor& p) : AudioProcessorEdit
     cwui::hostkeys::noKeyboardFocus (*this, &panel.popupOverlay());   // includes the resize corner
     addMouseListener (this, true);
     const int w = p.uiWidth.load(), h = p.uiHeight.load();
-    if (w >= DrumPlayerProcessor::kBaseW * 6 / 10 && h >= DrumPlayerProcessor::kBaseH * 6 / 10) setSize (w, h); else setSize (DrumPlayerProcessor::kBaseW, DrumPlayerProcessor::kBaseH);
+    if (w >= DrumPlayerProcessor::kBaseW * 6 / 10 && h >= DrumPlayerProcessor::kBaseH * 6 / 10 && std::abs ((double) w / h - (double) DrumPlayerProcessor::kBaseW / DrumPlayerProcessor::kBaseH) < 0.02) setSize (w, h); else setSize (DrumPlayerProcessor::kBaseW, DrumPlayerProcessor::kBaseH);
 }
 
 DrumPlayerEditor::~DrumPlayerEditor() { removeMouseListener (this); setLookAndFeel (nullptr); }
@@ -960,7 +966,7 @@ DrumPlayerEditor::~DrumPlayerEditor() { removeMouseListener (this); setLookAndFe
 void DrumPlayerEditor::applySavedSize()
 {
     const int w = proc.uiWidth.load(), h = proc.uiHeight.load();
-    if (w >= DrumPlayerProcessor::kBaseW * 6 / 10 && h >= DrumPlayerProcessor::kBaseH * 6 / 10 && (w != getWidth() || h != getHeight())) setSize (w, h);
+    if (w >= DrumPlayerProcessor::kBaseW * 6 / 10 && h >= DrumPlayerProcessor::kBaseH * 6 / 10 && std::abs ((double) w / h - (double) DrumPlayerProcessor::kBaseW / DrumPlayerProcessor::kBaseH) < 0.02 && (w != getWidth() || h != getHeight())) setSize (w, h);
 }
 
 void DrumPlayerEditor::resized()

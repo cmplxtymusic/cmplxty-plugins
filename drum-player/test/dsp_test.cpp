@@ -130,5 +130,12 @@ int main()
         check (audio / secs > 20, "32 voices well above realtime");
     }
     std::printf (fails == 0 ? "ALL PASSED\n" : "%d FAILED\n", fails);
+    {   // GM / FPC map (1.1)
+        bool ok = true;
+        for (int pad = 0; pad < kPads; ++pad) ok = ok && gmMap (gmPadNote (pad)).pad == pad && gmMap (gmPadNote (pad)).st == 0;
+        ok = ok && gmMap (51).pad == 7 && gmMap (51).st > 0 && gmMap (45).pad == 5 && gmMap (45).st > gmMap (41).st && gmMap (48).st > gmMap (45).st;
+        ok = ok && gmMap (35).pad == 0 && gmMap (40).pad == 1 && gmMap (44).pad == 3 && gmMap (60).pad == -1 && gmMap (0).pad == -1 && gmMap (127).pad == -1;
+        check (ok, "GM map: pad notes round-trip, toms pitched up the kit, ride on the cymbal pad, unknown notes ignored");
+    }
     return fails;
 }

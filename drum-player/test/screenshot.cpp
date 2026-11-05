@@ -53,7 +53,8 @@ int procTests()
     {
         DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         check (proc.getTotalNumInputChannels() == 0 && proc.getTotalNumOutputChannels() == 2 && proc.acceptsMidi() && proc.getLatencySamples() == 0, "instrument: no audio in, stereo out, MIDI in, zero latency");
-        check (proc.getParameters().size() == 52 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1, "52 parameters with defaults (kit, hats choke, base C1)");
+        check (proc.getParameters().size() == 59 && v (proc, "noteMap") == 0 && v (proc, "patPlay") == 0 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1, "59 parameters with defaults (kit, hats choke, GM map, pattern stopped)");
+        set (proc, "noteMap", 1);   // the 1.0 tests below use the chromatic map
         check (txt (proc, "p1Pan", -0.5f) == "L50" && txt (proc, "p1Pan", 0.0f) == "C" && txt (proc, "p1Decay", 4000.0f) == "Full" && txt (proc, "p1Sound", 16) == "Sample", "pan / decay / sound text");
         auto y = render (proc, 20, {});
         check (rmsOf (y, 0) == 0.0, "no MIDI = silence");
@@ -76,7 +77,7 @@ int procTests()
     }
     {   // choke through the processor: pad 4 (D#1, closed hat) cuts pad 5 (E1, open hat)
         DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
-        set (proc, "p5Sound", 5); set (proc, "p4Sound", 4); set (proc, "p4Level", -60.0f);
+        set (proc, "noteMap", 1); set (proc, "p5Sound", 5); set (proc, "p4Sound", 4); set (proc, "p4Level", -60.0f);
         auto y = render (proc, 30, { { 0, on (40, 1) }, { 4800, on (39, 1) } });
         const double choked = rmsOf (y, 4800 + 480, 14400);
         render (proc, 2, { { 0, juce::MidiMessage::allSoundOff (1) } });
@@ -88,7 +89,7 @@ int procTests()
     }
     {   // user samples: load from a WAV, pitch, preset + state round trip with the audio embedded
         const auto wavM = writeWav ("cmplxty-dp-test-mono.wav", 441.0, 44100, 1), wavS = writeWav ("cmplxty-dp-test-st.wav", 882.0, 22050, 2);
-        DrumPlayerProcessor a; a.setRateAndBufferSizeDetails (sr, bs); a.prepareToPlay (sr, bs);
+        DrumPlayerProcessor a; set (a, "noteMap", 1); a.setRateAndBufferSizeDetails (sr, bs); a.prepareToPlay (sr, bs);
         check (a.loadSample (2, wavM) && a.hasUserSample (2) && v (a, "p3Sound") == 16 && a.padSoundName (2) == "cmplxty-dp-test-mono", "WAV loads into pad 3 and switches it to Sample");
         check (a.loadSample (6, wavS) && ! a.loadSample (7, juce::File ("/nonexistent/x.wav")) && ! a.hasUserSample (7), "stereo WAV loads; a missing file is refused");
         std::vector<float> R;
@@ -101,7 +102,7 @@ int procTests()
         check (std::fabs (rmsOf (y, 1000, 10000) / rmsOf (R, 1000, 10000) - 2.0) < 0.05, "stereo WAV keeps left / right");
         const auto pf = a.presets.userFileFor ("Kit Round Trip");
         check (a.presets.saveFile (pf, "Kit Round Trip"), "user kit preset saved");
-        DrumPlayerProcessor b; b.setRateAndBufferSizeDetails (sr, bs); b.prepareToPlay (sr, bs);
+        DrumPlayerProcessor b; set (b, "noteMap", 1); b.setRateAndBufferSizeDetails (sr, bs); b.prepareToPlay (sr, bs);
         wavM.deleteFile(); wavS.deleteFile();   // the preset must carry the audio itself
         check (b.presets.loadFile (pf) && b.hasUserSample (2) && b.hasUserSample (6) && v (b, "p3Tune") == 12.0f && b.padSoundName (6) == "cmplxty-dp-test-st", "kit preset restores both samples with the files gone");
         y = render (b, 30, { { 0, on (38, 1) } });
@@ -131,7 +132,7 @@ int procTests()
             DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (rate, bs); proc.prepareToPlay (rate, bs);
             for (int i = 0; i < proc.presets.numFactory(); ++i)
             {
-                proc.presets.loadFactory (i); proc.reset();
+                set (proc, "noteMap", 1); proc.presets.loadFactory (i); proc.reset();
                 const int blocks = (int) (rate * 2 / bs); const int base = 36;
                 std::vector<std::pair<int, juce::MidiMessage>> ev;
                 for (int p = 0; p < 8; ++p) ev.push_back ({ p * 4000, on (base + p, 1.0f) });
@@ -155,6 +156,103 @@ int procTests()
         DrumPlayerProcessor b;
         check (b.presets.loadFile (f) && v (b, "p2Sound") == 12 && std::fabs (v (b, "p7Decay") - 333.0f) < 1.0f && v (b, "kitTune") == -3.0f && b.presets.currentName() == "Round Trip", "user preset loads back into another instance");
         f.deleteFile();
+    }
+    {   // 1.1: GM / FPC note map
+        DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+        struct { int note, pad; } gm[] = { { 36, 0 }, { 38, 1 }, { 39, 2 }, { 42, 3 }, { 46, 4 }, { 41, 5 }, { 45, 5 }, { 48, 5 }, { 37, 6 }, { 49, 7 }, { 51, 7 } };
+        int bad = 0;
+        for (auto g : gm)
+        {
+            render (proc, 2, { { 0, juce::MidiMessage::allSoundOff (1) } });
+            const int before = proc.dspEngine().hits[g.pad].load();
+            render (proc, 4, { { 0, on (g.note) } });
+            if (proc.dspEngine().hits[g.pad].load() <= before) { ++bad; std::printf ("  note %d did not hit pad %d\n", g.note, g.pad + 1); }
+        }
+        check (bad == 0, "GM map: 36 kick, 38 snare, 39 clap, 42 CH, 46 OH, 41/45/48 toms, 37 rim, 49 crash, 51 ride");
+        render (proc, 2, { { 0, juce::MidiMessage::allSoundOff (1) } });
+        auto lo = render (proc, 20, { { 0, on (41, 1) } }); render (proc, 2, { { 0, juce::MidiMessage::allSoundOff (1) } });
+        auto hi = render (proc, 20, { { 0, on (48, 1) } });
+        check (freq (hi, 200, 9000) > freq (lo, 200, 9000) * 1.2, "tom 48 is pitched above tom 41");
+        set (proc, "noteMap", 1); render (proc, 2, { { 0, juce::MidiMessage::allSoundOff (1) } });
+        const int h1 = proc.dspEngine().hits[1].load(); render (proc, 4, { { 0, on (37) } });
+        check (proc.dspEngine().hits[1].load() > h1, "chromatic map still available (37 = pad 2)");
+    }
+    {   // 1.1: old (1.0) sessions keep the chromatic map; kit presets don't touch pattern settings
+        DrumPlayerProcessor a; set (a, "noteMap", 1);
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        if (xml) for (auto* e = xml->getFirstChildElement(); e != nullptr; ) { auto* n = e->getNextElement(); if (e->getStringAttribute ("id") == "noteMap") xml->removeChildElement (e, true); e = n; }
+        juce::MemoryBlock mb2; juce::AudioProcessor::copyXmlToBinary (*xml, mb2);
+        DrumPlayerProcessor b; b.setStateInformation (mb2.getData(), (int) mb2.getSize());
+        check (xml != nullptr && v (b, "noteMap") == 1, "a 1.0 session (no noteMap) loads with the chromatic map");
+        DrumPlayerProcessor c; set (c, "pattern", 5); set (c, "fillStyle", 3); set (c, "dragLen", 3); c.presets.loadFactory (4);
+        check (v (c, "pattern") == 5 && v (c, "fillStyle") == 3 && v (c, "dragLen") == 3, "loading a kit keeps the pattern / fill / drag settings");
+    }
+    {   // 1.1: patterns and fills
+        DrumPlayerProcessor p; int bad = 0, nofill = 0;
+        const int np = p.apvts.getParameter ("pattern")->getNumSteps(), nf = p.apvts.getParameter ("fillStyle")->getNumSteps();
+        for (int pi = 0; pi < np; ++pi) for (int fi = 0; fi < nf; ++fi) for (int fl = 0; fl < 4; ++fl) for (int bl : { 0, 3 })
+        {
+            set (p, "pattern", (float) pi); set (p, "fillStyle", (float) fi); set (p, "fillLen", (float) fl); set (p, "dragLen", (float) bl);
+            const auto ev = p.clipEvents(); const double len = 4.0 * (1 << bl);
+            bool ok = ! ev.empty();
+            for (size_t k = 0; k < ev.size(); ++k) ok = ok && ev[k].beat >= 0 && ev[k].beat < len && ev[k].vel > 0 && ev[k].vel <= 1 && (k == 0 || ev[k - 1].beat <= ev[k].beat);
+            bad += ok ? 0 : 1;
+            if (fi != 0) { bool crash = false; for (auto& e : ev) crash = crash || (e.beat == 0 && e.note == 49); nofill += crash ? 0 : 1; }
+        }
+        check (bad == 0, "every pattern x fill x length: hits sorted, inside the clip, velocities 0..1");
+        check (nofill == 0, "with a fill on, the clip comes back round with a crash on beat 1");
+        set (p, "pattern", 0); set (p, "fillStyle", 2); set (p, "dragLen", 2); set (p, "fillLen", 2);
+        auto a = p.clipEvents(); p.newFill(); auto b = p.clipEvents();
+        bool sameGroove = true, diffFill = a.size() != b.size();
+        for (size_t k = 0; k < std::min (a.size(), b.size()); ++k)
+        { if (a[k].beat < 12) sameGroove = sameGroove && a[k].beat == b[k].beat && a[k].note == b[k].note; else diffFill = diffFill || a[k].beat != b[k].beat || a[k].note != b[k].note || a[k].vel != b[k].vel; }
+        check (sameGroove && diffFill, "NEW FILL changes the fill bar and leaves the groove alone");
+    }
+    {   // 1.1: pattern playback follows tempo; MIDI and WAV drag-out files
+        DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+        auto y = render (proc, 100, {});
+        check (rmsOf (y, 0) == 0.0 && proc.hostTempo() == 0 && proc.tempo() == 120.0 && proc.tempoSource() == "default", "pattern off = silent; no host tempo -> 120 default");
+        set (proc, "patPlay", 1); y = render (proc, 100, {});
+        check (rmsOf (y, 0) > 0.01 && proc.playPosition() >= 0, "pattern play makes sound and moves the playhead");
+        set (proc, "patPlay", 0);
+        set (proc, "dragLen", 1); set (proc, "fillStyle", 2);
+        juce::String err; auto mf = proc.exportMidi (err);
+        juce::MidiFile mid; bool parsed = false; int notes = 0, nonGm = 0; double bpm = 0, endBeat = 0;
+        if (juce::FileInputStream in (mf); mf.existsAsFile() && in.openedOk()) parsed = mid.readFrom (in);
+        if (parsed && mid.getNumTracks() > 0)
+        {
+            const double tpq = mid.getTimeFormat();
+            for (int t = 0; t < mid.getNumTracks(); ++t) for (auto* me : *mid.getTrack (t))
+            {
+                auto& m = me->message;
+                if (m.isTempoMetaEvent()) bpm = 60.0 / m.getTempoSecondsPerQuarterNote();
+                if (m.isNoteOn()) { ++notes; const int n = m.getNoteNumber(); nonGm += (n == 36 || n == 38 || n == 39 || n == 37 || n == 42 || n == 46 || n == 49 || n == 51 || (n >= 41 && n <= 50)) ? 0 : 1; nonGm += m.getChannel() == 10 ? 0 : 1; }
+                if (m.isEndOfTrackMetaEvent()) endBeat = std::max (endBeat, m.getTimeStamp() / tpq);
+            }
+        }
+        std::printf ("  midi: %s  notes=%d bpm=%.2f end=%.2f err=%s\n", mf.getFileName().toRawUTF8(), notes, bpm, endBeat, err.toRawUTF8());
+        check (parsed && notes > 16 && nonGm == 0 && std::fabs (bpm - 120.0) < 0.01 && std::fabs (endBeat - 8.0) < 1e-6, ".mid drag-out: GM notes on channel 10, tempo, exactly 2 bars");
+        { juce::String e0; check (! proc.exportPart (DrumPlayerProcessor::kPartToms, e0).exists() && e0.contains ("no"), "a part with no hits (toms, Roll fill) is refused with a message, not a silent file"); }
+        set (proc, "fillStyle", 4);   // Toms fill so every part has hits
+        int okParts = 0;
+        for (int part = 0; part < DrumPlayerProcessor::kNumParts; ++part)
+        {
+            juce::String e2; auto wf = proc.exportPart (part, e2);
+            juce::WavAudioFormat wav;
+            if (auto* in = wf.createInputStream().release())
+                if (std::unique_ptr<juce::AudioFormatReader> r (wav.createReaderFor (in, true)); r != nullptr)
+                {
+                    juce::AudioBuffer<float> b ((int) r->numChannels, (int) r->lengthInSamples); r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+                    const juce::int64 want = (juce::int64) std::llround (8 * 60.0 / 120.0 * r->sampleRate);
+                    const bool ok = std::abs (r->lengthInSamples - want) <= 1 && r->bitsPerSample == 24 && b.getRMSLevel (0, 0, b.getNumSamples()) > 1e-3;
+                    std::printf ("  wav %-28s %lld samples (want %lld) %d-bit rms=%.4f\n", wf.getFileName().toRawUTF8(), (long long) r->lengthInSamples, (long long) want, (int) r->bitsPerSample, b.getRMSLevel (0, 0, b.getNumSamples()));
+                    okParts += ok ? 1 : 0;
+                }
+            wf.deleteFile();
+        }
+        check (okParts == DrumPlayerProcessor::kNumParts, "audio drag-outs (full, kick, snare, top, toms): 24-bit, exactly 2 bars, not silent");
+        mf.deleteFile();
     }
     {   // state
         DrumPlayerProcessor a; a.uiWidth = 1320; a.uiHeight = 1046;
