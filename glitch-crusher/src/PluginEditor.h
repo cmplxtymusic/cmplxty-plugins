@@ -169,7 +169,7 @@ private:
 
     GlitchCrusherProcessor& proc;
     KnobBox bits, down, drive, prob, cutoff, res, mix, outGain;
-    Combo rate, rev, ftype;
+    Combo rate, rev, ftype, os;
     Section crushSec, glitchSec, filterSec;
     juce::Rectangle<int> crushArea, glitchArea, filterArea, outArea, footerArea;
     gcui::PopupOverlay popup;

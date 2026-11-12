@@ -282,6 +282,7 @@ GlitchCrusherEditor::GlitchCrusherEditor (GlitchCrusherProcessor& p) : AudioProc
     addKnob (cutoff, "cutoff", "CUTOFF");  addKnob (res, "resonance", "RESONANCE");
     addKnob (mix, "mix", "MIX");           addKnob (outGain, "outGain", "OUTPUT");
     addCombo (rate, "glitchRate", "SLICE");  addCombo (rev, "reverse", "REVERSE");  addCombo (ftype, "filterType", "FILTER");
+    addCombo (os, "oversample", "OVERSAMPLING");
 
     crushSec.members  = { &bits.slider, &bits.label, &down.slider, &down.label, &drive.slider, &drive.label };
     glitchSec.members = { &prob.slider, &prob.label, &rate.box, &rate.label, &rev.box, &rev.label };
@@ -579,7 +580,15 @@ void GlitchCrusherEditor::resized()
         cutoff.label.setBounds (k1.getX(), k1.getY(), k1.getWidth(), 16); cutoff.slider.setBounds (k1.getX(), k1.getY() + 14, k1.getWidth(), k1.getHeight() - 14);
         res.label.setBounds (r.getX(), r.getY(), r.getWidth(), 16); res.slider.setBounds (r.getX(), r.getY() + 14, r.getWidth(), r.getHeight() - 14);
     }
-    knobRow (outArea, { &mix.slider, &outGain.slider }, { &mix.label, &outGain.label });
+    { // out: mix, gain, oversampling
+        auto r = outArea.reduced (8); r.removeFromTop (14);
+        auto cb = r.removeFromRight (r.getWidth() / 3).reduced (0, 6);
+        os.label.setBounds (cb.removeFromTop (16)); os.box.setBounds (cb.removeFromTop (26));
+        const int w = r.getWidth() / 2;
+        auto k1 = r.removeFromLeft (w);
+        mix.label.setBounds (k1.getX(), k1.getY(), k1.getWidth(), 16); mix.slider.setBounds (k1.getX(), k1.getY() + 14, k1.getWidth(), k1.getHeight() - 14);
+        outGain.label.setBounds (r.getX(), r.getY(), r.getWidth(), 16); outGain.slider.setBounds (r.getX(), r.getY() + 14, r.getWidth(), r.getHeight() - 14);
+    }
 
     for (auto [sec, area2] : { std::pair<Section*, juce::Rectangle<int>> { &crushSec, crushArea }, { &glitchSec, glitchArea }, { &filterSec, filterArea } })
         sec->power.setBounds (area2.getRight() - 50, area2.getY() + 4, 42, 16);

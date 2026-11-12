@@ -56,7 +56,7 @@ private:
     std::atomic<float>* pProb; std::atomic<float>* pRate; std::atomic<float>* pRev;
     std::atomic<float>* pFType; std::atomic<float>* pCut; std::atomic<float>* pRes;
     std::atomic<float>* pMix; std::atomic<float>* pOut;
-    std::atomic<float>* pCrushOn; std::atomic<float>* pGlitchOn; std::atomic<float>* pFilterOn;
+    std::atomic<float>* pCrushOn; std::atomic<float>* pGlitchOn; std::atomic<float>* pFilterOn, *pOversample;
     bool firstBlock = true;
 
     juce::AudioParameterBool* bypassParam = nullptr;

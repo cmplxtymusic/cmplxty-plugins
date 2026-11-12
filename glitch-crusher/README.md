@@ -1,5 +1,7 @@
 # CMPLXTY Glitch Crusher
 
+**1.1.0:** The crush stage is oversampled (8× by default) and Downsample starts at 1× (bit-depth only), so bright sounds no longer spray digital fizz. At Downsample 1 the bit-depth and drive stages run at the oversampled rate, which is what cuts the aliases. The default output is 3.5 dB quieter so a new instance sits at about the same loudness as the input. Bit Depth's taper spreads the useful range more evenly. Old sessions keep their bits, downsample and output gain, but get the cleaner oversampling.
+
 Free bit-crusher / sample-rate reducer / tempo-synced glitch stutter / filter effect plug-in by CMPLXTY.
 **VST3 + CLAP**, Windows x64 (installer built and tested under Wine only - see *Status*), macOS and Linux build from the same source.
 Licence: **GNU GPL v3** (see `COPYING`). Download page: https://cmplxty.music/plugins/glitch-crusher/

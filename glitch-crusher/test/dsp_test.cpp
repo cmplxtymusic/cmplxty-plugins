@@ -40,7 +40,7 @@ static Buf drums (int n, double sr)
 
 static gc::Params transparent()
 {
-    gc::Params p; p.bits = 16; p.downsample = 1; p.drive = 0; p.glitchProb = 0; p.filterType = 0; p.mix = 1; p.outGainDb = 0; return p;
+    gc::Params p; p.bits = 16; p.downsample = 1; p.drive = 0; p.glitchProb = 0; p.filterType = 0; p.mix = 1; p.outGainDb = 0; p.oversample = 1; return p;
 }
 
 // run engine over interleaved-by-channel buffers using given block pattern. params applied once up front (snap).

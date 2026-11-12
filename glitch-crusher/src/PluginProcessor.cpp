@@ -12,9 +12,9 @@ APVTS::ParameterLayout GlitchCrusherProcessor::createLayout()
     auto pid = [ver] (const char* id) { return ParameterID { id, ver }; };
 
     p.push_back (std::make_unique<AudioParameterFloat> (pid ("bits"), "Bit Depth",
-        NormalisableRange<float> (1.0f, 16.0f, 0.01f), 8.0f, AudioParameterFloatAttributes().withLabel ("bit")));
+        NormalisableRange<float> (1.0f, 16.0f, 0.01f, 0.4f), 8.0f, AudioParameterFloatAttributes().withLabel ("bit")));
     p.push_back (std::make_unique<AudioParameterFloat> (pid ("downsample"), "Downsample",
-        NormalisableRange<float> (1.0f, 64.0f, 0.01f, 0.4f), 4.0f, AudioParameterFloatAttributes().withLabel ("x")));
+        NormalisableRange<float> (1.0f, 64.0f, 0.01f, 0.4f), 1.0f, AudioParameterFloatAttributes().withLabel ("x")));
     p.push_back (std::make_unique<AudioParameterFloat> (pid ("drive"), "Drive",
         NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.2f, AudioParameterFloatAttributes().withLabel ("%")
             .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)); })
@@ -38,11 +38,13 @@ APVTS::ParameterLayout GlitchCrusherProcessor::createLayout()
             .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)); })
             .withValueFromStringFunction ([] (const String& s) { return s.getFloatValue() / 100.0f; })));
     p.push_back (std::make_unique<AudioParameterFloat> (pid ("outGain"), "Output Gain",
-        NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f, AudioParameterFloatAttributes().withLabel ("dB")));
+        NormalisableRange<float> (-24.0f, 12.0f, 0.1f), -3.5f, AudioParameterFloatAttributes().withLabel ("dB")));
     // section on/off switches (cross-faded in the DSP, so automating them does not click)
     p.push_back (std::make_unique<AudioParameterBool> (pid ("crushOn"), "Crush On", true));
     p.push_back (std::make_unique<AudioParameterBool> (pid ("glitchOn"), "Glitch On", true));
     p.push_back (std::make_unique<AudioParameterBool> (pid ("filterOn"), "Filter On", false));
+    p.push_back (std::make_unique<AudioParameterChoice> (pid ("oversample"), "Oversampling",
+        StringArray { "Off", "2x", "4x", "8x" }, 3));   // default 8x; old sessions without this param also get 8x (cleaner)
     p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "bypass", 1 }, "Bypass", false));
     return { p.begin(), p.end() };
 }
@@ -63,6 +65,7 @@ GlitchCrusherProcessor::GlitchCrusherProcessor()
     pOut   = apvts.getRawParameterValue ("outGain");
     pCrushOn = apvts.getRawParameterValue ("crushOn");  pGlitchOn = apvts.getRawParameterValue ("glitchOn");
     pFilterOn = apvts.getRawParameterValue ("filterOn");
+    pOversample = apvts.getRawParameterValue ("oversample");
 }
 
 bool GlitchCrusherProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -93,6 +96,10 @@ void GlitchCrusherProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     p.filterType = 1 + (int) pFType->load(); p.cutoffHz = pCut->load(); p.resonance = pRes->load();
     p.mix = pMix->load(); p.outGainDb = pOut->load();
     p.crushOn = pCrushOn->load() > 0.5f; p.glitchOn = pGlitchOn->load() > 0.5f; p.filterOn = pFilterOn->load() > 0.5f;
+    {
+        const int oi = (int) std::lround (pOversample->load());
+        p.oversample = oi == 0 ? 1 : oi == 1 ? 2 : oi == 2 ? 4 : 8;
+    }
     engine.setParams (p);
     if (firstBlock) { engine.snapSmoothers(); firstBlock = false; }
 

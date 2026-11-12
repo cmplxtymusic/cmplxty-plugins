@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "Oversampler.h"
 
 namespace gc
 {
@@ -17,7 +18,7 @@ constexpr int kMaxChannels = 8;
 struct Params
 {
     float bits        = 8.0f;   // 1..16 (fractional allowed, smoothed)
-    float downsample  = 4.0f;   // 1..64 hold factor in samples (fractional allowed)
+    float downsample  = 1.0f;   // 1..64 hold factor. 1 = bits only (new default, much less fizz).
     float drive       = 0.2f;   // 0..1
     float glitchProb  = 0.25f;  // 0..1 probability a grid slice becomes a stutter repeat
     int   glitchRate  = 2;      // 0:1/4  1:1/8  2:1/16  3:1/32
@@ -30,6 +31,7 @@ struct Params
     bool  crushOn     = true;   // section switches (cross-faded, no clicks): CRUSH = drive + downsample + bit depth
     bool  glitchOn    = true;   // GLITCH = tempo-synced stutter
     bool  filterOn    = true;   // FILTER (also needs filterType != 0)
+    int   oversample  = 8;      // 1, 2, 4 or 8. 8x is the new default (less alias fizz).
 };
 
 struct Transport
@@ -76,6 +78,7 @@ public:
         }
         fadeLen = std::max (8, (int) (0.0015 * sr));
         gateCoef = 1.0f - std::exp (-1.0f / (0.002f * (float) sr));
+        for (int c = 0; c < kMaxChannels; ++c) os[(size_t) c].setFactor (8);
         reset();
         snapSmoothers();
     }
@@ -87,6 +90,7 @@ public:
             std::fill (rec[(size_t) c].begin(), rec[(size_t) c].end(), 0.0f);
             std::fill (frozen[(size_t) c].begin(), frozen[(size_t) c].end(), 0.0f);
             held[(size_t) c] = 0.f; ic1[(size_t) c] = ic2[(size_t) c] = 0.f;
+            os[(size_t) c].reset();
         }
         writePos = 0; holdCnt = 1.0e9f; glitching = false; reversed = false;
         frozenLen = 1; playPos = 0; gate = 0.f; lastSliceIdx = INT64_MIN; freePpq = 0.0;
@@ -105,6 +109,13 @@ public:
         sGain.set (std::pow (10.0f, std::fmax (-24.f, std::fmin (12.f, p.outGainDb)) / 20.0f));
         sCrushOn.set (p.crushOn ? 1.0f : 0.0f);
         sFiltOn.set (p.filterOn && p.filterType != 0 ? 1.0f : 0.0f);
+        const int f = p.oversample >= 8 ? 8 : p.oversample >= 4 ? 4 : p.oversample >= 2 ? 2 : 1;
+        if (f != osFactor)
+        {
+            osFactor = f;
+            for (int c = 0; c < kMaxChannels; ++c) { os[(size_t) c].setFactor (f); os[(size_t) c].reset(); }
+            holdCnt = 1.0e9f;
+        }
     }
 
     void snapSmoothers()
@@ -142,9 +153,12 @@ public:
             ppq += ppqPerSample;
 
             // --- crusher params for this sample ---
-            holdCnt += 1.0f;
-            const bool resample = holdCnt >= down;
-            if (resample) { holdCnt -= down; if (holdCnt >= down) holdCnt = 0.f; }
+            const int F = osFactor;
+            // down=1 means "no rate reduction": quantise every oversampled sample so
+            // the bit-depth stage actually runs at F*fs and its harmonics get filtered
+            // on the way down. down>1 keeps the same physical hold time (down audio
+            // samples = down*F oversampled samples), which is the crush character.
+            const float downHi = (down <= 1.0001f) ? 1.0f : down * (float) F;
             const float step = 2.0f / std::exp2 (bits);       // 2^bits levels over [-1,1]
             const float invStep = 1.0f / step;
             const float lim = 1.0f - 0.5f * step;
@@ -167,20 +181,40 @@ public:
             }
             const int rp = reversed ? (frozenLen - 1 - playPos) : playPos;
 
+            // Drive, then oversample the hold+quantiser (4x default) so foldback aliases
+            // land above the Nyquist of the host rate and get filtered out on the way down.
+            // The hold period is scaled by F so a given Downsample value lasts the same
+            // amount of time. The mid-rise silence dead-zone is kept.
+            float crushed[kMaxChannels] {}, dryIn[kMaxChannels] {};
+            float hi[kMaxChannels][16] {};
             for (int c = 0; c < ch; ++c)
             {
                 const float dry = detail::sanitize (io[c][i]);
-                // drive (exact bypass at 0)
-                float x = dry;
-                if (drv > 1.0e-4f) x = dry + drv * (std::tanh (g * dry) * invTanhG - dry);
-                // sample-rate reduction
-                if (resample) held[(size_t) c] = x;
-                float y = held[(size_t) c];
-                // bit-depth quantiser (mid-rise, sign-symmetric): exact silence stays silent and there is no DC offset
-                // (the old floor()+0.5 mapped 0 to +half a step: a constant DC floor on silence)
-                y = std::fabs (y) < 1.0e-9f ? 0.0f : std::copysign ((std::floor (std::fabs (y) * invStep) + 0.5f) * step, y);
-                y = std::fmax (-lim, std::fmin (lim, y));
-                // CRUSH section switch: cross-fade to the untouched input
+                dryIn[(size_t) c] = dry;
+                os[(size_t) c].up (dry, hi[(size_t) c]);
+            }
+            for (int k = 0; k < F; ++k)
+            {
+                holdCnt += 1.0f;
+                const bool resample = holdCnt >= downHi;
+                if (resample) { holdCnt -= downHi; if (holdCnt >= downHi) holdCnt = 0.f; }
+                for (int c = 0; c < ch; ++c)
+                {
+                    float x = hi[(size_t) c][k];
+                    if (drv > 1.0e-4f) x = x + drv * (std::tanh (g * x) * invTanhG - x);
+                    if (resample) held[(size_t) c] = x;
+                    float y = (downHi <= 1.0001f) ? x : held[(size_t) c];
+                    // when down=1, quantise the live oversampled sample (held would also work
+                    // because resample is true every time); when down>1, use the held value.
+                    y = std::fabs (y) < 1.0e-9f ? 0.0f : std::copysign ((std::floor (std::fabs (y) * invStep) + 0.5f) * step, y);
+                    y = std::fmax (-lim, std::fmin (lim, y));
+                    hi[(size_t) c][k] = y;
+                }
+            }
+            for (int c = 0; c < ch; ++c)
+            {
+                const float dry = dryIn[(size_t) c];
+                float y = os[(size_t) c].down (hi[(size_t) c]);
                 if (crushAmt < 1.0f) y = dry + crushAmt * (y - dry);
                 // record crushed signal, then maybe replace with frozen slice
                 rec[(size_t) c][(size_t) writePos] = y;
@@ -264,5 +298,7 @@ private:
     detail::Smooth sBits, sDown, sDrive, sCut, sRes, sMix, sGain, sCrushOn, sFiltOn;
     std::array<std::vector<float>, kMaxChannels> rec, frozen;
     std::array<float, kMaxChannels> held {}, ic1 {}, ic2 {};
+    std::array<cmx::Oversampler, kMaxChannels> os {};
+    int osFactor = 4;
 };
 } // namespace gc
