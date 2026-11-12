@@ -16,7 +16,7 @@ constexpr int kLines = 8;
 struct Params
 {
     float preDelayMs = 20.0f, size = 0.6f, decayS = 6.0f, diffusion = 0.7f;
-    float darkHz = 3500.0f, lowCutHz = 80.0f, metal = 0.25f, mod = 0.3f;
+    float darkHz = 3500.0f, lowCutHz = 150.0f, metal = 0.25f, mod = 0.3f;
     bool shimOn = false; float shimSemis = 12.0f, shimAmt = 0.3f;
     bool freeze = false; float width = 1.0f, mix = 0.35f, gainDb = 0.0f;
 };

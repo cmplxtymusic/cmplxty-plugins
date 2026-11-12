@@ -29,7 +29,7 @@ public:
     const juce::String getName() const override { return "CMPLXTY Dark Reverb"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return pFreeze->load() > 0.5f ? 60.0 : (double) pDecay->load() * 1.5 + (double) pPre->load() * 0.001; }
+    double getTailLengthSeconds() const override { return pFreeze->load() > 0.5f ? 120.0 : (double) pDecay->load() * 4.0 + (double) pPre->load() * 0.001 + 8.0; }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}

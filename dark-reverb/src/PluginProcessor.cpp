@@ -10,7 +10,7 @@ const dr::PDef kParams[] = {
     { "decay",     "Decay",         'f', 0.3f, 30.0f, 0.01f, 0.35f, 6.0f, "s" },
     { "diffusion", "Diffusion",     'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.7f, "%" },
     { "dark",      "Darkness",      'f', 800.0f, 16000.0f, 1.0f, 0.3f, 3500.0f, "Hz" },
-    { "lowCut",    "Low Cut",       'f', 20.0f, 1000.0f, 0.1f, 0.3f, 80.0f, "Hz" },
+    { "lowCut",    "Low Cut",       'f', 20.0f, 1000.0f, 0.1f, 0.3f, 150.0f, "Hz" },
     { "metal",     "Metal",         'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.25f, "%" },
     { "mod",       "Modulation",    'f', 0.0f, 1.0f, 0.001f, 1.0f, 0.3f, "%" },
     { "shimOn",    "Shimmer",       'b', 0, 1, 1, 1, 0.0f, "" },

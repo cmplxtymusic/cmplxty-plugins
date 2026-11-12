@@ -1,5 +1,7 @@
 # CMPLXTY Dark Reverb
 
+**1.0.3:** New instances start with the low cut at 150 Hz (clearer). The reported tail is long enough to cover the real decay down to silence. Old sessions keep their low-cut value.
+
 Free reverb by CMPLXTY for huge, dark, metallic spaces: up to 30 s of decay, a **shimmer** loop that pitch-shifts the tail upward
 (or down), and **freeze** for endless pads. Inspired by big ambient / cinematic reverbs. It is its own design and not a clone of any product.
 
