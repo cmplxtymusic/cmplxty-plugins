@@ -263,6 +263,15 @@ void ModulePanel::paint(juce::Graphics &g)
                juce::Justification::centredLeft);
 }
 
+void ModulePanel::updateDim()
+{
+    const bool alive = on.getToggleState();
+    const float a = alive ? 1.0f : 0.38f;
+    for (auto &k : knobs) k->setAlpha(a);
+    for (auto &l : labels) l->setAlpha(a);
+    for (auto &b : boxes) b->setAlpha(a);
+}
+
 void ModulePanel::resized()
 {
     auto r = getLocalBounds().reduced(6);
@@ -665,6 +674,8 @@ void RiggedEditor::timerCallback()
                    juce::dontSendNotification);
     undo.setEnabled(proc.canUndo() > 0);
     redo.setEnabled(proc.canRedo() > 0);
+    for (auto &m : modules)
+        if (m) m->updateDim();
 }
 
 void RiggedEditor::file(bool write)

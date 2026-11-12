@@ -45,6 +45,7 @@ class ModulePanel final : public juce::Component
     int fxIndex = 0;
     std::function<void(ModulePanel *, juce::Point<int>)> onDragStart, onDrag, onDragEnd;
     juce::Rectangle<int> headerBounds() const { return getLocalBounds().removeFromTop(28); }
+    void updateDim();
 
   private:
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;

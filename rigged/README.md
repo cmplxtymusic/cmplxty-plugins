@@ -1,5 +1,7 @@
 # CMPLXTY RIGGED
 
+**1.0.1:** Module knobs dim when that module is off. No change to the sound.
+
 A randomizable effects rack. Eleven processors sit in a chain you can reorder by dragging, each with its own on/off, a LOCK that keeps it out of a roll, and automatable knobs. RANDOMIZE (also automatable: it rolls when the parameter rises) moves unlocked parameters from where they are now, scaled by AMOUNT, with a smart roll that stays musical and level-safe. Undo and redo walk the roll history. MIX, OUTPUT, an automatic gain match, a safety limiter at −1 dBFS (on by default) and DAW-synced delay and tremolo sit on the top bar. Twenty-five factory presets; your own presets are `.rigged` files.
 
 The eleven processors: Filter (LP / HP / BP state-variable), Drive, Crush (bits and downsample), Ring Mod, Chorus, Phaser, Delay (tempo-sync), Reverb, Comp, Tremolo (tempo-sync) and Width.
