@@ -104,6 +104,28 @@ void HeftProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuf
     meter.store(peak);
     reduction.store(engine.reductionDb);
 }
+
+heft::Settings HeftProcessor::getSettings() const
+{
+    heft::Settings s;
+    for (int i = 0; i < heft::Count; ++i)
+    {
+        const float v = values[i]->load();
+        s.value[i] = std::isfinite(v) ? juce::jlimit(heft::definitions[i].low, heft::definitions[i].high, v)
+                                      : heft::definitions[i].initial;
+    }
+    for (int i = 0; i < 4; ++i)
+    {
+        auto read = [&](int j, float lo, float hi)
+        {
+            const float v = routes[i][j]->load();
+            return std::isfinite(v) ? juce::jlimit(lo, hi, v) : 0.f;
+        };
+        s.routes[i] = {juce::roundToInt(read(0, 0, 4)), juce::roundToInt(read(1, 0, 6)), read(2, -1, 1)};
+    }
+    return s;
+}
+
 void HeftProcessor::set(const juce::String &id, float v)
 {
     if (auto *p = state.getParameter(id))

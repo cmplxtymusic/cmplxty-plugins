@@ -22,6 +22,7 @@ class HeftProcessor final : public juce::AudioProcessor
     void changeProgramName(int, const juce::String &) override {}
     void getStateInformation(juce::MemoryBlock &) override;
     void setStateInformation(const void *, int) override;
+    heft::Settings getSettings() const;
     void set(const juce::String &, float);
     void factory(int);
     void dice();

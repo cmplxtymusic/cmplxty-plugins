@@ -1,11 +1,13 @@
-# CMPLXTY HEFT 1.0.0
+# CMPLXTY HEFT
+
+**1.0.1:** WIDE keeps the bass mono, so full width no longer collapses in mono. The frequency-shift knob has a gentler taper so small shifts are easier to find (the ±400 Hz ends are the same; values in the middle move a little). Dependent knobs dim when their parent is off.
 
 An original density/motion effect, inspired by the broad concept of distortion/compression with surrounding colour tools. No Stereo Lemon branding, graphics, layout or code are used. GPLv3.
 
 ## Controls
 - **SLAM** blends antiderivative-antialiased tanh drive and linked compressor reduction. Drive Range, threshold, ratio, attack and release are under the hood.
 - **FUZZ** adds input-envelope-gated stereo noise. NOISE TONE controls a broad bandpass (100 Hz–10 kHz centre).
-- **WIDE** expands side and adds a highpassed decorrelated side. The centre and mono sum remain unchanged before the final safety limiter. Does not promise perfect correlation at maximum width.
+- **WIDE** expands the side and adds a highpassed decorrelated side. Bass below 150 Hz stays mono, so full width stays mono-safe. The mid (centre) is unchanged before the final safety limiter.
 - **DISPERSER** crossfades an eight-stage allpass chain. DISP FOCUS moves its phase knee.
 - **FREQ SHIFT** is a quadrature/Hilbert single-sideband frequency shifter, ±400 Hz. It is not a pitch shifter. Low-frequency quadrature accuracy is finite.
 - **TRANSIENT** boosts attack relative to a slower envelope; **TIGHT** attenuates falling tails relative to that envelope. TIGHT is not AI source separation or reverb removal.

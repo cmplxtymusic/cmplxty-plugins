@@ -25,6 +25,8 @@ class Engine
                                                          .08 * std::cos(4 * pi * k / (taps - 1))))
                                                 : 0;
         }
+        sideHpA.setHP(sr, 150.f);
+        sideHpB.setHP(sr, 150.f);
     }
     void set(const Settings &s) { target = s; }
     void tick(float &left, float &right, float sidechain) noexcept
@@ -83,8 +85,11 @@ class Engine
         const float ap = (std::tan(float(pi) * std::min(current[Focus], float(sr * .2)) / float(sr)) - 1) /
                          (std::tan(float(pi) * std::min(current[Focus], float(sr * .2)) / float(sr)) + 1);
         float wet[2]{l, r};
-        shiftBlend += float(smooth) * ((std::abs(v[Shift]) > .01f ? 1.f : 0.f) - shiftBlend);
-        shiftPhase += 2 * pi * v[Shift] / sr;
+        // FREQ SHIFT taper: stored endpoints ±400 Hz are unchanged; the middle of the
+        // travel is stretched so useful small shifts are easier to find (exponent 1.6).
+        const float shiftHz = std::copysign(400.f * std::pow(std::min(1.f, std::abs(v[Shift]) / 400.f), 1.6f), v[Shift]);
+        shiftBlend += float(smooth) * ((std::abs(shiftHz) > .01f ? 1.f : 0.f) - shiftBlend);
+        shiftPhase += 2 * pi * shiftHz / sr;
         if (shiftPhase > pi)
             shiftPhase -= 2 * pi;
         if (shiftPhase < -pi)
@@ -123,7 +128,13 @@ class Engine
         wideY = decor;
         const float spread = decor - mid;
         wideLow += float(1 - std::exp(-2 * pi * 180 / sr)) * (spread - wideLow);
-        side = side * (1 + v[Wide]) + (spread - wideLow) * v[Wide] * .35f;
+        // Width addition is high-passed at 150 Hz (Linkwitz-Riley 24 dB/oct, same idea as
+        // Mix Tools' mono-bass). Bass stays mono; the default (WIDE = 0) is unchanged.
+        const float sideNat = side;
+        const float sideWide = side * (1 + v[Wide]) + (spread - wideLow) * v[Wide] * .35f;
+        float delta = sideWide - sideNat;
+        delta = sideHp2(sideHp1(delta));
+        side = sideNat + delta;
         l = (dryL * (1 - current[Mix]) + (mid + side) * current[Mix]);
         r = (dryR * (1 - current[Mix]) + (mid - side) * current[Mix]);
         const float out = std::pow(10.f, current[Output] / 20);
@@ -171,6 +182,32 @@ class Engine
         rng ^= rng << 5;
         return float(double(rng) / 2147483648.0 - 1);
     }
+    struct BQ
+    {
+        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        void setHP(double srate, float hz)
+        {
+            const float w = std::tan(float(pi) * hz / float(srate));
+            const float n = 1.f / (1.f + 1.41421356f * w + w * w);
+            b0 = n;
+            b1 = -2.f * n;
+            b2 = n;
+            a1 = 2.f * (w * w - 1.f) * n;
+            a2 = (1.f - 1.41421356f * w + w * w) * n;
+            x1 = x2 = y1 = y2 = 0;
+        }
+        float run(float x)
+        {
+            const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
+            x1 = x;
+            y2 = y1;
+            y1 = std::isfinite(y) ? y : 0.f;
+            return y1;
+        }
+    };
+    float sideHp1(float x) { return sideHpA.run(x); }
+    float sideHp2(float x) { return sideHpB.run(x); }
     double sr = 48000, smooth = .001, phase = 0, shiftPhase = 0, noisePhase = 0;
     uint32_t rng = 0x173ac451;
     Settings target;
@@ -184,5 +221,6 @@ class Engine
     std::array<std::array<float, latency>, 2> dry{};
     std::array<float, taps> hilbert{};
     int index = 0, hindex = 0;
+    BQ sideHpA, sideHpB;
 };
 } // namespace heft

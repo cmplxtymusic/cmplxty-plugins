@@ -232,6 +232,32 @@ void HeftEditor::timerCallback()
     status.setText("OUT " + juce::String(db, 1) + " dBFS   /   LIMIT " +
                        juce::String(proc.reduction.load(), 1) + " dB",
                    juce::dontSendNotification);
+    const auto s = proc.getSettings();
+    auto dim = [&](heft::Parameter id, bool on) {
+        const float a = on ? 1.0f : 0.38f;
+        knobs[(size_t)id].setAlpha(a);
+        labels[(size_t)id].setAlpha(a);
+    };
+    dim(heft::Tone, s.value[heft::Fuzz] > 0.001f);          // NOISE TONE
+    dim(heft::Focus, s.value[heft::Smear] > 0.001f);        // DISP FOCUS
+    // LFO RATE, ENV RELEASE, MOTION and the four mod routes: only live when a route uses them
+    bool anyRoute = false, lfoUsed = false, envUsed = false;
+    for (int i = 0; i < 4; ++i)
+    {
+        const bool assigned = s.routes[i].source != 0 && s.routes[i].destination != 0 && std::abs(s.routes[i].amount) > 0.001f;
+        anyRoute = anyRoute || assigned;
+        // Combo items: 0 Off, 1 Envelope, 2 LFO, 3 Noise, 4 Sidechain
+        const int src = s.routes[i].source;
+        if (assigned && src == 2) lfoUsed = true;
+        if (assigned && src == 1) envUsed = true;
+        const float ra = assigned ? 1.0f : 0.38f;
+        sources[(size_t)i].setAlpha(ra);
+        destinations[(size_t)i].setAlpha(ra);
+        depths[(size_t)i].setAlpha(ra);
+    }
+    dim(heft::Rate, lfoUsed);
+    dim(heft::EnvTime, envUsed);
+    dim(heft::Motion, anyRoute);
 }
 void HeftEditor::file(bool write)
 {
