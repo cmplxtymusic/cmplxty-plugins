@@ -23,6 +23,7 @@ Free, open-source audio plugins by Sam Arnstein (CMPLXTY), for Windows and macOS
 | Quartz | [`quartz/`](quartz/) | Saturation / distortion engine (VST3, AGPLv3) |
 | Yoink | [`yoink/`](yoink/) | Find YouTube clips by phrase and drag the audio into your DAW (MIT) |
 | RIGGED | [`rigged/`](rigged/) | Randomizable 11-effect rack |
+| FEVER | [`fever/`](fever/) | One-knob mood effect: granular pitch cloud to spectral rift |
 
 ## Download
 Installers for every plugin: **https://cmplxty.music/plugins/**. Each page shows the file's SHA-256 hash.

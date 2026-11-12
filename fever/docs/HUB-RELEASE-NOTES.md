@@ -1,0 +1,11 @@
+# Prepared only, not applied
+
+The Plugin Hub reads GitHub Releases; no plugins.json or HubCore catalog edit is required. Verified against the same `parseReleases` path used for the other CMPLXTY plugins: a `fever-v1.0.0` tag is accepted, the bundle name `CMPLXTY FEVER` is derived from `CMPLXTY-FEVER-Setup-...`, and `typeFor` falls back to **FX**, which is the correct type for this product. SHA256SUMS is needed to enable installation. Drafts and prereleases are ignored. After Sam explicitly approves pushing and tagging:
+
+1. Push the `fever` branch (or the approved integration) and tag `fever-v1.0.0` only with approval.
+2. Run the fever workflow; verify the macOS universal package and native host/installation smoke tests.
+3. Prepare a complete release with assets `CMPLXTY-FEVER-Setup-1.0.0-win.exe`, `CMPLXTY-FEVER-Setup-1.0.0-mac.pkg`, combined `SHA256SUMS`, and the corresponding source archive and licenses.
+4. Publish only after the approved release gate. Hub Refresh should discover slug `fever` / version 1.0.0 from the tag and installers. Verify Hub download/install/update paths manually before declaring support.
+5. Website/Gumroad product and update metadata can be coordinated later; no Bob/Wolf notification or site change was performed here. `mac/install-mac.sh` already lists the `fever` slug so `all` and `--list` will pick it up once `https://cmplxty.music/plugins/fever/version.json` exists and has a `mac.url`.
+
+Suggested release summary: Original one-knob mood effect. The hero knob is dry in the centre (nulls against the input). To the left it opens a granular pitch cloud of octaves and fifths, detuned and wide; to the right a spectral engine with resonant peaks, a cold tail and a detuned dissonant halo. Two side knobs change meaning with the hero (Density/Spread on the cloud side, Freeze/Halo on the rift side) and the UI labels follow. Tempo-sync heartbeat, Mix, automatic gain match, a −1 dBFS safety limiter (on by default), 12 factory presets and user `.fever` files, plus a heartbeat visual with a Reduce Motion toggle. Windows installer unsigned; Mac artifact pending CI. Inspired by the idea of a single-knob lush-to-harsh mood sweep, not a recreation of any existing product.

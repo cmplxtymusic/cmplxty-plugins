@@ -1,0 +1,112 @@
+# CMPLXTY FEVER - CI for github.com/cmplxtymusic/cmplxty-plugins (project lives in the fever/ folder).
+# GitHub only reads workflows from the repository root: this file belongs at .github/workflows/fever.yml
+# (a copy is kept at fever/ci/fever.yml).
+# STATUS: not yet run on GitHub (win-ci branch adds workflow_call, metadata check and tag releases). The Windows job mirrors the local, tested box build;
+# the macOS job has never run on a Mac. Installers are UNSIGNED (Windows SmartScreen / macOS Gatekeeper will warn).
+name: fever
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    tags: ['fever-v*']
+    paths: ['fever/**', '.github/workflows/fever.yml']
+  pull_request:
+    paths: ['fever/**', '.github/workflows/fever.yml']
+defaults:
+  run:
+    shell: bash
+    working-directory: fever
+env:
+  LLVM_VERSION: '23.1.4'
+  XWIN_VERSION: '0.10.0'
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libxcomposite-dev libxext-dev libgl1-mesa-dev xvfb
+      - run: ./scripts/fetch-deps.sh
+      - name: Build VST3 + CLAP
+        run: |
+          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_BUILD_EXAMPLES=OFF -DJUCE_BUILD_EXTRAS=OFF -DCLAP_JUCE_EXTENSIONS_BUILD_EXAMPLES=OFF
+          cmake --build build/linux --target Fever_VST3 Fever_CLAP FeverTest --parallel
+      - name: DSP and processor tests
+        run: |
+          xvfb-run -a build/linux/FeverTest_artefacts/Release/FeverTest test /tmp/fever-tests
+      - name: Package
+        run: |
+          mkdir -p ../out/linux
+          cp -r build/linux/Fever_artefacts/Release/VST3 build/linux/Fever_artefacts/Release/CLAP ../out/linux/
+          mkdir -p ../out/moduleinfo
+          cp "build/linux/Fever_artefacts/Release/VST3/CMPLXTY FEVER.vst3/Contents/Resources/moduleinfo.json" ../out/moduleinfo/
+      - uses: actions/upload-artifact@v4
+        with: { name: fever-linux, path: out/linux }
+      - uses: actions/upload-artifact@v4
+        with: { name: fever-moduleinfo, path: out/moduleinfo }
+
+  windows:
+    # cross-compiled on Linux with clang-cl + xwin (static /MT CRT, no Visual C++ redistributable needed), packed with NSIS
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: fever-moduleinfo, path: fever/build/linux/Fever_artefacts/Release/VST3/CMPLXTY FEVER.vst3/Contents/Resources }
+      - name: Tools (NSIS, ninja, host compiler for juceaide)
+        run: sudo apt-get update && sudo apt-get install -y nsis ninja-build g++ libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev
+      - uses: actions/cache@v4
+        id: toolcache
+        with:
+          path: |
+            ~/.local/llvm
+            ~/.local/xwin-sdk
+          key: llvm-${{ env.LLVM_VERSION }}-xwin-${{ env.XWIN_VERSION }}
+      - name: LLVM + Windows SDK/CRT (xwin; accepting the Microsoft licence)
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/llvm ~/.local/bin /tmp/dl && cd /tmp/dl
+          curl -fsSL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/LLVM-$LLVM_VERSION-Linux-X64.tar.xz"
+          tar -xf llvm.tar.xz -C ~/.local/llvm --strip-components=1
+          curl -fsSL -o xwin.tar.gz "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf xwin.tar.gz --strip-components=1 -C ~/.local/bin
+          ~/.local/bin/xwin --accept-license --arch x86_64 --variant desktop splat --output ~/.local/xwin-sdk
+      - run: ./scripts/fetch-deps.sh
+      - run: ./scripts/build-windows-xwin.sh
+      - run: ./scripts/build-installer.sh
+      - name: Check ProductName / ProductVersion metadata (SignPath)
+        run: |
+          pip install --quiet pefile
+          S=dist/stage-windows-x64
+          python3 ../tools/check-win-metadata.py . "$S/CMPLXTY FEVER.vst3/Contents/x86_64-win/CMPLXTY FEVER.vst3" "$S/CMPLXTY FEVER.clap" dist/*-win.exe
+      - name: Checksum
+        run: cd dist && sha256sum CMPLXTY-FEVER-Setup-*-win.exe | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fever-windows-installer
+          path: |
+            fever/dist/CMPLXTY-FEVER-Setup-*-win.exe
+            fever/dist/SHA256SUMS
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja
+      - run: ./scripts/fetch-deps.sh
+      - name: Universal VST3 + CLAP -> .pkg
+        run: ./scripts/build-macos-pkg.sh
+      - name: Checksum
+        run: cd dist && shasum -a 256 CMPLXTY-FEVER-Setup-*-mac.pkg | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fever-macos-installer
+          path: |
+            fever/dist/CMPLXTY-FEVER-Setup-*-mac.pkg
+            fever/dist/SHA256SUMS
+
+  # After Sam approves: tag fever-v1.0.0, collect both installers and SHA256SUMS,
+  # then explicitly publish a complete GitHub Release. No automatic publishing.
