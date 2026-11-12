@@ -39,3 +39,5 @@ jobs:
     uses: ./.github/workflows/rigged.yml
   fever:
     uses: ./.github/workflows/fever.yml
+  stoke:
+    uses: ./.github/workflows/stoke.yml

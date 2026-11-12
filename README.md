@@ -24,6 +24,7 @@ Free, open-source audio plugins by Sam Arnstein (CMPLXTY), for Windows and macOS
 | Yoink | [`yoink/`](yoink/) | Find YouTube clips by phrase and drag the audio into your DAW (MIT) |
 | RIGGED | [`rigged/`](rigged/) | Randomizable 11-effect rack |
 | FEVER | [`fever/`](fever/) | One-knob mood effect: granular pitch cloud to spectral rift |
+| STOKE | [`stoke/`](stoke/) | Clean mid-focus: boost, glow and smooth presence |
 
 ## Download
 Installers for every plugin: **https://cmplxty.music/plugins/**. Each page shows the file's SHA-256 hash.
