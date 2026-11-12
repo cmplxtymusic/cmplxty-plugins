@@ -15,6 +15,7 @@ Free, open-source audio plugins by Sam Arnstein (CMPLXTY), for Windows and macOS
 | Mix Tools | [`mix-tools/`](mix-tools/) | Stereo widener, transient shaper, limiter |
 | Cyber Wavetable | [`cyber-wavetable/`](cyber-wavetable/) | Wavetable synth |
 | Drum Player | [`drum-player/`](drum-player/) | 8-pad drum sampler |
+| SMOTHER | [`smother/`](smother/) | Sleeve drum machine |
 | Neon FX | [`neon-fx/`](neon-fx/) | Stutter / tape-stop / filter / drive performance effect |
 | VVITCH | [`vvitch/`](vvitch/) | Witch house polysynth (chip, tape, choral vox, DRAG) |
 | Rewired | [`rewired/`](rewired/) | Audio to MIDI: bass, melody, chords and drums from a song or stems (VST3 / CLAP / Standalone) |
