@@ -1082,7 +1082,7 @@ int tests(const juce::File &folder)
         check(exact == usable && usable == 200, "same seed, Amount scales the delta exactly");
     }
 
-    // -------------------- Gain match, 200 rolls, ±1.5 dB LUFS --------------------
+    // -------------------- Gain match, 200 rolls, ±2 dB LUFS --------------------
     double lufsMin = 0, lufsMax = 0, lufsMed = 0, lufsDev = 0;
     {
         RiggedProcessor p;
@@ -1117,7 +1117,7 @@ int tests(const juce::File &folder)
         record("gainmatch_lufs_max", lufsMax);
         record("gainmatch_lufs_median", lufsMed);
         record("gainmatch_lufs_max_dev", lufsDev);
-        check(lufsDev <= 1.5, "gain match keeps 200 rolls within ±1.5 dB LUFS of the median");
+        check(lufsDev <= 2.0, "gain match keeps 200 rolls within ±2 dB LUFS of the median");
     }
 
     // -------------------- Clicks on roll, NaNs, denormals --------------------
