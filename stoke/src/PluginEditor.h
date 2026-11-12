@@ -29,10 +29,13 @@ class StokeEditor final : public juce::AudioProcessorEditor, private juce::Timer
     void revealPreset(int index);
 
   private:
+    static constexpr int kBins = 256;
     void timerCallback() override;
     void file(bool write);
     void updateDim();
     void paintSpectrum(juce::Graphics &, juce::Rectangle<float>);
+    void analyseScope(const std::array<float, stoke::Engine::kScope> &ring, int writePos,
+                      std::array<float, kBins> &dest);
     void makeKnob(juce::Slider &, const char *tip);
     void makeLab(juce::Label &, const char *t, float h, bool bold);
 
@@ -48,9 +51,7 @@ class StokeEditor final : public juce::AudioProcessorEditor, private juce::Timer
         aMix, aOut;
     juce::ButtonParameterAttachment aMid, aMatch, aLimit;
     int currentPreset = 0;
-    static constexpr int kBins = 256;
-    std::array<float, kBins> bins{};
-    float binPeak = 1.0e-6f;
+    std::array<float, kBins> binsIn{}, binsOut{};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StokeEditor)
 };

@@ -997,10 +997,37 @@ int main(int argc, char **argv)
         setup(p);
         const int preset = argc > 3 ? std::atoi(argv[3]) : 0;
         p.factory(preset);
+        p.snapEngine();
         auto ed = std::make_unique<StokeEditor>(p);
         ed->revealPreset(preset);
         ed->setVisible(true);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(700);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(80);
+
+        // Feed a vocal loop through the processor so the analyser shows a live
+        // input/output spectrum and the FOCUS curve's auto dip and notches.
+        const double sr = 48000.0;
+        auto dry = vocalish(sr, 4.0);
+        dry.applyGain(2.4f);
+        const int n = dry.getNumSamples();
+        const int block = 512;
+        juce::MidiBuffer midi;
+        auto feed = [&](int end) {
+            auto buf = dry;
+            int pos = 0;
+            while (pos < end)
+            {
+                const int k = std::min(block, end - pos);
+                float *chs[2] = { buf.getWritePointer(0, pos), buf.getWritePointer(1, pos) };
+                juce::AudioBuffer<float> sl(chs, 2, k);
+                p.processBlock(sl, midi);
+                pos += k;
+            }
+        };
+        feed(n); // settle detectors and gain-match
+        // Stop mid-phrase (note 5 of 8) so the scope ring holds a loud window.
+        feed(std::min(n, (int)std::llround(2.25 * sr)));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(400);
+
         auto image = ed->createComponentSnapshot(ed->getLocalBounds());
         juce::File imageFile(argv[2]);
         imageFile.deleteFile();

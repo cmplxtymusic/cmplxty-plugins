@@ -154,7 +154,7 @@ StokeEditor::StokeEditor(StokeProcessor &p)
 {
     setLookAndFeel(&look);
     setOpaque(true);
-    setSize(800, 580);
+    setSize(800, 720);
     setWantsKeyboardFocus(false);
 
     makeKnob(focus, "FOCUS: how hard the mids come forward. At zero the sound is untouched.");
@@ -231,7 +231,8 @@ StokeEditor::StokeEditor(StokeProcessor &p)
     save.onClick = [this] { file(true); };
     load.onClick = [this] { file(false); };
 
-    bins.fill(0);
+    binsIn.fill(-90.f);
+    binsOut.fill(-90.f);
     startTimerHz(30);
     updateDim();
 }
@@ -314,24 +315,26 @@ void StokeEditor::timerCallback()
         st = st + (st.isEmpty() ? "" : "   ") + "-" + juce::String(rd, 1) + " dB limit";
     status.setText(st, juce::dontSendNotification);
 
-    // Scope -> log-frequency magnitude bins (simple DFT-ish energy, 2048 Hann).
     const auto &eng = proc.getEngine();
-    const int w = eng.scopeW.load(std::memory_order_relaxed);
+    const int wr = eng.scopeW.load(std::memory_order_relaxed);
+    analyseScope(eng.scopeIn, wr, binsIn);
+    analyseScope(eng.scope, wr, binsOut);
+
+    updateDim();
+    (void)fmt;
+    repaint();
+}
+
+void StokeEditor::analyseScope(const std::array<float, stoke::Engine::kScope> &ring, int writePos,
+                              std::array<float, kBins> &dest)
+{
     constexpr int N = 2048;
-    std::array<float, N> x{};
-    for (int i = 0; i < N; ++i)
-    {
-        const int idx = (w - N + i + stoke::Engine::kScope) & (stoke::Engine::kScope - 1);
-        const float win = 0.5f - 0.5f * std::cos(2.f * stoke::kPi * (float)i / (float)(N - 1));
-        x[(size_t)i] = eng.scope[(size_t)idx] * win;
-    }
-    // Coarse log bins via Goertzel-ish energy in FFT-less bands (sum of squares by bin).
-    // A real radix-2 FFT:
     std::array<float, N> re{}, im{};
     for (int i = 0; i < N; ++i)
     {
-        re[(size_t)i] = x[(size_t)i];
-        im[(size_t)i] = 0;
+        const int idx = (writePos - N + i + stoke::Engine::kScope) & (stoke::Engine::kScope - 1);
+        const float win = 0.5f - 0.5f * std::cos(2.f * stoke::kPi * (float)i / (float)(N - 1));
+        re[(size_t)i] = ring[(size_t)idx] * win;
     }
     for (int i = 1, j = 0; i < N; ++i)
     {
@@ -367,9 +370,9 @@ void StokeEditor::timerCallback()
             }
         }
     }
+
     const float sr = (float)std::max(proc.getSampleRate(), 44100.0);
-    std::array<float, kBins> next{};
-    next.fill(1.0e-12f);
+    std::array<float, kBins> sum{}, cnt{};
     for (int k = 1; k < N / 2; ++k)
     {
         const float hz = sr * (float)k / (float)N;
@@ -377,19 +380,20 @@ void StokeEditor::timerCallback()
             continue;
         const float t = std::log(hz / 40.f) / std::log(20000.f / 40.f);
         const int b = stoke::clampi((int)(t * (float)kBins), 0, kBins - 1);
-        const float mag = re[(size_t)k] * re[(size_t)k] + im[(size_t)k] * im[(size_t)k];
-        next[(size_t)b] += mag;
+        const float mag = std::sqrt(re[(size_t)k] * re[(size_t)k] + im[(size_t)k] * im[(size_t)k]);
+        sum[(size_t)b] += mag;
+        cnt[(size_t)b] += 1.f;
     }
+    // Hann coherent gain 0.5; 20 log10 so a full-scale sine sits near 0 dBFS.
+    const float norm = 1.f / (0.5f * (float)N);
     for (int i = 0; i < kBins; ++i)
     {
-        const float db = 10.f * std::log10(std::max(next[(size_t)i], 1.0e-18f));
-        bins[(size_t)i] += 0.35f * (db - bins[(size_t)i]);
+        const float mag = (cnt[(size_t)i] > 0.f ? sum[(size_t)i] / cnt[(size_t)i] : 0.f) * norm;
+        const float db = 20.f * std::log10(std::max(mag, 1.0e-12f));
+        dest[(size_t)i] += 0.40f * (db - dest[(size_t)i]);
     }
-
-    updateDim();
-    (void)fmt;
-    repaint();
 }
+
 
 void StokeEditor::paintSpectrum(juce::Graphics &g, juce::Rectangle<float> area)
 {
@@ -398,91 +402,178 @@ void StokeEditor::paintSpectrum(juce::Graphics &g, juce::Rectangle<float> area)
     g.setColour(line());
     g.drawRoundedRectangle(area, 4.f, 1.f);
 
-    const auto inner = area.reduced(8.f, 6.f);
+    auto body = area.reduced(10.f, 8.f);
+    const auto labels = body.removeFromBottom(16.f);
+    const auto eqArea = body.removeFromTop(64.f);
+    body.removeFromTop(4.f);
+    const auto spArea = body;
+
     const auto s = proc.getSettings();
     const float cHz = stoke::centreHz(s[stoke::Centre]);
     const float oct = stoke::clampf(s[stoke::Width], stoke::kWidthMin, stoke::kWidthMax);
     const float lo = cHz / std::pow(2.f, oct * 0.5f);
     const float hi = cHz * std::pow(2.f, oct * 0.5f);
-    const float x0 = inner.getX(), w = inner.getWidth();
+    const float x0 = eqArea.getX(), w = eqArea.getWidth();
     const float xl = hzToX(lo, x0, w), xr = hzToX(hi, x0, w), xc = hzToX(cHz, x0, w);
 
-    // Highlight the mid band.
-    g.setColour(juce::Colour(0x28e8e8e8));
-    g.fillRect(xl, inner.getY(), std::max(2.f, xr - xl), inner.getHeight());
-    g.setColour(juce::Colour(0x66e8e8e8));
-    g.drawLine(xc, inner.getY(), xc, inner.getBottom(), 1.2f);
+    // Subtle mid-band region across both panes.
+    g.setColour(juce::Colour(0x0ae8e8e8));
+    const float bandW = std::max(2.f, xr - xl);
+    g.fillRect(xl, eqArea.getY(), bandW, eqArea.getHeight());
+    g.fillRect(xl, spArea.getY(), bandW, spArea.getHeight());
 
-    // Spectrum bars.
-    float mn = 0, mx = -160;
-    for (float v : bins)
-    {
-        mx = std::max(mx, v);
-        mn = std::min(mn, v);
-    }
-    const float loDb = std::min(mx - 60.f, -90.f);
-    const float hiDb = std::max(mx, -12.f);
-    juce::Path sp;
-    bool started = false;
-    for (int i = 0; i < kBins; ++i)
-    {
-        const float x = inner.getX() + inner.getWidth() * (float)i / (float)(kBins - 1);
-        const float t = stoke::clampf((bins[(size_t)i] - loDb) / std::max(hiDb - loDb, 1.f), 0.f, 1.f);
-        const float y = inner.getBottom() - t * inner.getHeight();
-        if (!started)
-        {
-            sp.startNewSubPath(x, inner.getBottom());
-            sp.lineTo(x, y);
-            started = true;
-        }
-        else
-            sp.lineTo(x, y);
-    }
-    sp.lineTo(inner.getRight(), inner.getBottom());
-    sp.closeSubPath();
-    g.setColour(juce::Colour(0x99c8c8c8));
-    g.fillPath(sp);
-    g.setColour(juce::Colours::white);
-    g.strokePath(sp, juce::PathStrokeType(1.1f));
-
-    // Frequency labels.
-    g.setColour(dim());
-    g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(11.f)));
+    // Frequency grid.
     const float marks[] = { 100.f, 300.f, 1000.f, 3000.f, 10000.f };
     const char *labs[] = { "100", "300", "1k", "3k", "10k" };
+    g.setColour(juce::Colour(0x223a3a3a));
     for (int i = 0; i < 5; ++i)
     {
         const float x = hzToX(marks[i], x0, w);
-        g.drawText(labs[i], (int)x - 16, (int)inner.getBottom() - 2, 32, 14, juce::Justification::centred);
+        g.drawLine(x, eqArea.getY(), x, spArea.getBottom(), 1.f);
+    }
+    g.setColour(juce::Colour(0x333a3a3a));
+    g.drawLine(xc, eqArea.getY(), xc, spArea.getBottom(), 1.f);
+
+    // ---- EQ curve pane: +12 dB at the top, -12 dB at the bottom. ----
+    auto eqY = [&](float db) {
+        const float t = stoke::clampf((db + 12.f) / 24.f, 0.f, 1.f);
+        return eqArea.getBottom() - t * eqArea.getHeight();
+    };
+    g.setColour(juce::Colour(0x443a3a3a));
+    g.drawHorizontalLine((int)std::round(eqY(6.f)), eqArea.getX(), eqArea.getRight());
+    g.drawHorizontalLine((int)std::round(eqY(-6.f)), eqArea.getX(), eqArea.getRight());
+    {
+        const float dashes[2] = { 3.f, 3.f };
+        g.setColour(juce::Colour(0x88555555));
+        g.drawDashedLine({ eqArea.getX(), eqY(0.f), eqArea.getRight(), eqY(0.f) }, dashes, 2, 1.f);
+    }
+
+    const auto &eng = proc.getEngine();
+    juce::Path curve;
+    constexpr int kCurve = 200;
+    for (int i = 0; i < kCurve; ++i)
+    {
+        const float t = (float)i / (float)(kCurve - 1);
+        const float hz = 40.f * std::pow(20000.f / 40.f, t);
+        const float x = x0 + t * w;
+        const float y = eqY(eng.curveMagDb(hz));
+        if (i == 0)
+            curve.startNewSubPath(x, y);
+        else
+            curve.lineTo(x, y);
+    }
+    g.setColour(juce::Colour(0x33e8e8e8));
+    g.strokePath(curve, juce::PathStrokeType(4.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(juce::Colour(0xffe8e8e8));
+    g.strokePath(curve, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    g.setColour(dim());
+    g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(10.f)));
+    auto dbLab = [&](float db, const char *txt) {
+        g.drawText(txt, (int)eqArea.getX() + 2, (int)eqY(db) - 7, 28, 14, juce::Justification::centredLeft);
+    };
+    dbLab(6.f, "+6");
+    dbLab(0.f, "0");
+    dbLab(-6.f, "-6");
+
+    // ---- Spectrum pane: 0 dB at the top, -90 dB at the bottom. ----
+    auto spY = [&](float db) {
+        const float t = stoke::clampf((db + 90.f) / 90.f, 0.f, 1.f);
+        return spArea.getBottom() - t * spArea.getHeight();
+    };
+    g.setColour(juce::Colour(0x223a3a3a));
+    g.drawHorizontalLine((int)std::round(spY(-30.f)), spArea.getX(), spArea.getRight());
+    g.drawHorizontalLine((int)std::round(spY(-60.f)), spArea.getX(), spArea.getRight());
+
+    auto buildSpec = [&](const std::array<float, kBins> &bins, bool close) {
+        juce::Path path;
+        bool started = false;
+        for (int i = 0; i < kBins; ++i)
+        {
+            const float t = (float)i / (float)(kBins - 1);
+            const float x = spArea.getX() + t * spArea.getWidth();
+            const float y = spY(bins[(size_t)i]);
+            if (!started)
+            {
+                if (close)
+                    path.startNewSubPath(x, spArea.getBottom());
+                else
+                    path.startNewSubPath(x, y);
+                if (close)
+                    path.lineTo(x, y);
+                started = true;
+            }
+            else
+                path.lineTo(x, y);
+        }
+        if (close)
+        {
+            path.lineTo(spArea.getRight(), spArea.getBottom());
+            path.closeSubPath();
+        }
+        return path;
+    };
+
+    auto inPath = buildSpec(binsIn, true);
+    g.setColour(juce::Colour(0x55666666));
+    g.fillPath(inPath);
+    g.setColour(juce::Colour(0xa0a0a0a0));
+    g.strokePath(buildSpec(binsIn, false),
+                 juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    auto outPath = buildSpec(binsOut, false);
+    g.setColour(juce::Colour(0xffd8d8d8));
+    g.strokePath(outPath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Legend.
+    g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(10.f)));
+    const float lx = spArea.getRight() - 118.f;
+    const float ly = spArea.getY() + 3.f;
+    g.setColour(juce::Colour(0x888a8a8a));
+    g.drawLine(lx, ly + 6.f, lx + 14.f, ly + 6.f, 1.2f);
+    g.drawText("IN", (int)lx + 16, (int)ly, 22, 12, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xffd8d8d8));
+    g.drawLine(lx + 42.f, ly + 6.f, lx + 56.f, ly + 6.f, 1.6f);
+    g.drawText("OUT", (int)lx + 58, (int)ly, 28, 12, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xffe8e8e8));
+    g.drawLine(lx + 90.f, eqArea.getY() + 6.f, lx + 104.f, eqArea.getY() + 6.f, 1.6f);
+    g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(10.f)));
+    g.setColour(dim());
+    g.drawText("EQ", (int)lx + 106, (int)eqArea.getY() + 1, 22, 12, juce::Justification::centredLeft);
+
+    // Frequency labels sit in a reserved strip so they never cover the curves.
+    g.setColour(dim());
+    g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(11.f)));
+    for (int i = 0; i < 5; ++i)
+    {
+        const float x = hzToX(marks[i], labels.getX(), labels.getWidth());
+        g.drawText(labs[i], (int)x - 16, (int)labels.getY(), 32, (int)labels.getHeight(),
+                   juce::Justification::centred);
     }
 }
 
 void StokeEditor::paint(juce::Graphics &g)
 {
     g.fillAll(bg());
-    auto bounds = getLocalBounds().toFloat();
-    // Top bar.
     g.setColour(juce::Colour(0xff101010));
     g.fillRect(0, 0, getWidth(), 86);
     g.setColour(line());
     g.drawLine(0, 86, (float)getWidth(), 86, 1);
 
-    // Spectrum area is painted in the reserved rectangle (set in resized via a stored? use layout math).
-    const auto spec = juce::Rectangle<float>(24.f, 98.f, (float)getWidth() - 48.f, 96.f);
+    const auto spec = juce::Rectangle<float>(24.f, 94.f, (float)getWidth() - 48.f, 176.f);
     paintSpectrum(g, spec);
 
-    // Subtle footer rule.
     g.setColour(line());
-    g.drawLine(24.f, (float)getHeight() - 36.f, (float)getWidth() - 24.f, (float)getHeight() - 36.f, 1);
+    g.drawLine(24.f, (float)getHeight() - 32.f, (float)getWidth() - 24.f, (float)getHeight() - 32.f, 1);
     g.setColour(dim());
     g.setFont(juce::Font(juce::FontOptions(look.face).withHeight(12.f)));
-    g.drawText("v1.0.0    double-click a knob to reset    CMPLXTY", 28, getHeight() - 30, getWidth() - 56, 22,
+    g.drawText("v1.0.0    double-click a knob to reset    CMPLXTY", 28, getHeight() - 26, getWidth() - 56, 20,
                juce::Justification::centredLeft);
-    (void)bounds;
 }
 
 void StokeEditor::resized()
 {
+    // Default window is 800 x 720. Every control is laid out inside a 28 px margin.
     brand.setBounds(28, 14, 90, 18);
     title.setBounds(118, 8, 160, 36);
     status.setBounds(getWidth() - 280, 14, 252, 20);
@@ -493,35 +584,32 @@ void StokeEditor::resized()
     save.setBounds(328, 50, 64, 26);
     load.setBounds(396, 50, 64, 26);
 
-    // Spectrum is painted at y=98, height 96. Knobs start at y=214.
-    const int ky = 220;
-    focus.setBounds(40, ky, 240, 240);
-    focusName.setBounds(40, ky + 232, 240, 22);
-    focusVal.setBounds(40, ky + 250, 240, 18);
+    // Spectrum occupies y = 94..270. Controls start at y = 286.
+    const int ky = 286;
+    focus.setBounds(40, ky, 220, 220);
+    focusName.setBounds(40, 506, 220, 20);
+    focusVal.setBounds(40, 526, 220, 18);
 
-    auto col = [ky](int x) {
-        return juce::Rectangle<int>(x, ky + 8, 110, 110);
+    // Three-button column under FOCUS, even 10 px gaps, same width as the knob.
+    midOnly.setBounds(40, 554, 220, 28);
+    match.setBounds(40, 592, 220, 28);
+    limit.setBounds(40, 630, 220, 28);
+
+    auto place = [](juce::Slider &s, juce::Label &n, juce::Label &v, int x, int y) {
+        s.setBounds(x, y, 156, 124);
+        n.setBounds(x, y + 124, 156, 18);
+        v.setBounds(x, y + 142, 156, 16);
     };
-    // Right cluster: CENTRE WIDTH / GLOW SMOOTH / MIX OUTPUT
-    const int rx = 330;
-    const int gap = 128;
-    auto place = [](juce::Slider &s, juce::Label &n, juce::Label &v, juce::Rectangle<int> r) {
-        s.setBounds(r);
-        n.setBounds(r.getX(), r.getBottom() - 4, r.getWidth(), 18);
-        v.setBounds(r.getX(), r.getBottom() + 12, r.getWidth(), 16);
-    };
-    place(centre, centreName, centreVal, { rx, ky + 4, 118, 118 });
-    place(width, widthName, widthVal, { rx + gap, ky + 4, 118, 118 });
-    place(glow, glowName, glowVal, { rx + 2 * gap, ky + 4, 118, 118 });
-    place(smooth, smoothName, smoothVal, { rx, ky + 160, 118, 118 });
-    place(mix, mixName, mixVal, { rx + gap, ky + 160, 118, 118 });
-    place(output, outName, outVal, { rx + 2 * gap, ky + 160, 118, 118 });
-
-    midOnly.setBounds(rx + 3 * gap - 10, ky + 20, 100, 28);
-    match.setBounds(rx + 3 * gap - 10, ky + 58, 100, 28);
-    limit.setBounds(rx + 3 * gap - 10, ky + 96, 100, 28);
-
-    (void)col;
+    // Right cluster: 40 px right margin (last column ends at 760).
+    const int rx = 280;
+    const int gap = 160;
+    place(centre, centreName, centreVal, rx, ky);
+    place(width, widthName, widthVal, rx + gap, ky);
+    place(glow, glowName, glowVal, rx + 2 * gap, ky);
+    const int ky2 = 456;
+    place(smooth, smoothName, smoothVal, rx, ky2);
+    place(mix, mixName, mixVal, rx + gap, ky2);
+    place(output, outName, outVal, rx + 2 * gap, ky2);
 }
 
 void StokeEditor::file(bool write)

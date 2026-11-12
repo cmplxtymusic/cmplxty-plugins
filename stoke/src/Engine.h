@@ -284,6 +284,7 @@ class Engine
         reductionDb = 0;
         makeupDb = 0;
         scope.fill(0);
+        scopeIn.fill(0);
         scopeW.store(0);
         boostG = mudG = 1;
         glowMix = 0;
@@ -413,6 +414,7 @@ class Engine
 
             const float mOut = 0.5f * (yL + yR);
             const int w = scopeW.load(std::memory_order_relaxed);
+            scopeIn[(size_t)w] = midIn;
             scope[(size_t)w] = mOut;
             scopeW.store((w + 1) & (kScope - 1), std::memory_order_relaxed);
             peak = std::max(peak, std::max(std::abs(yL), std::abs(yR)));
@@ -422,11 +424,47 @@ class Engine
         makeupDb = gainToDb(std::max(makeup, 1.0e-8f));
     }
 
-    // Meters and a scope ring for the live spectrum (mono mix of the output).
+    // Meters and scope rings for the live analyser (mono mix of input and output).
     float meter = 0, reductionDb = 0, makeupDb = 0;
     float focusView = 0.5f, centreView = kCentreDefault, widthView = kWidthDefault;
-    std::array<float, kScope> scope{};
+    std::array<float, kScope> scope{}, scopeIn{};
     std::atomic<int> scopeW{ 0 };
+
+    // Magnitude of the FOCUS EQ chain (boost bell, auto 330 Hz dip, SMOOTH notches) at hz, in dB.
+    // Uses the live gains so the curve follows automatic taming as audio runs.
+    float curveMagDb(float hz) const noexcept
+    {
+        hz = std::max(hz, 1.f);
+        const float fc = std::max(centreView, 1.f);
+        const float qBoost = widthToQ(clampf(widthView, kWidthMin, kWidthMax));
+        const float gB = boostG, gM = mudG;
+        float gH[kHarshBands];
+        for (int i = 0; i < kHarshBands; ++i)
+            gH[i] = harshG[i];
+
+        auto applyPeak = [&](float &re, float &im, float f0, float Q, float G) {
+            const float numIm = hz * f0 / std::max(Q, 0.05f);
+            const float denRe = f0 * f0 - hz * hz;
+            const float denIm = numIm;
+            const float n2 = denRe * denRe + denIm * denIm + 1.0e-30f;
+            const float hRe = numIm * denIm / n2;
+            const float hIm = numIm * denRe / n2;
+            const float fRe = 1.f + (G - 1.f) * hRe;
+            const float fIm = (G - 1.f) * hIm;
+            const float nRe = re * fRe - im * fIm;
+            const float nIm = re * fIm + im * fRe;
+            re = nRe;
+            im = nIm;
+        };
+
+        float re = 1.f, im = 0.f;
+        applyPeak(re, im, fc, qBoost, gB);
+        applyPeak(re, im, kMudHz, 0.95f, gM);
+        for (int i = 0; i < kHarshBands; ++i)
+            applyPeak(re, im, kHarshHz[i], 5.5f, gH[i]);
+        const float mag = std::sqrt(re * re + im * im);
+        return 20.f * std::log10(std::max(mag, 1.0e-12f));
+    }
 
   private:
     void updateCoefs(bool snapNow) noexcept
