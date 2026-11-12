@@ -1,5 +1,7 @@
 # CMPLXTY FEVER
 
+**1.0.1:** The rift (hate) side has a 180 Hz high-pass on the wet path so it doesn't fill the low-mids. The centre of the FEVER knob is labelled STILL. Side knobs dim at the centre; Heart Rate and Depth dim when Heart is off.
+
 A one-knob mood effect. The hero knob, FEVER, sits at dry in the centre. To the left it opens a granular pitch cloud of octaves and fifths, detuned and wide. To the right it opens a spectral engine: resonant peaks, a cold decaying tail, and a detuned dissonant halo. An original CMPLXTY effect, inspired by the idea of a single-knob sweep from lush to harsh, not a recreation of any existing product.
 
 Two side knobs change their meaning with the main knob: DENSITY and SPREAD on the cloud side, FREEZE and HALO on the rift side. MIX, OUTPUT, automatic gain match and a safety limiter at −1 dBFS (on by default) sit on the bar. A heartbeat option wobbles the knob in time with the DAW tempo (rate and depth). Twelve factory presets; your own presets are `.fever` files. REDUCE MOTION turns the mood animation and the heartbeat visual off.

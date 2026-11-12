@@ -128,6 +128,8 @@ class Engine
         bypassSmooth = onePole(0.006, sr);
         hpCoeff = onePole(1.0 / (2.0 * kPiD * 300.0), sr);
         coldHp = onePole(1.0 / (2.0 * kPiD * 320.0), sr);
+        hateHpL.set(sr, 180.f);
+        hateHpR.set(sr, 180.f);
         for (int i = 0; i < Count; ++i)
             cur.v[(size_t)i] = sm.v[(size_t)i] = definitions[(size_t)i].initial;
         reset();
@@ -162,6 +164,7 @@ class Engine
         spawnAcc = 0;
         ratioCursor = 0;
         hpL = hpR = hpZL = hpZR = 0;
+        hateHpL.resetState(); hateHpR.resetState();
         for (int i = 0; i < 4; ++i) coldHpL[i] = coldHpR[i] = 0;
         for (int i = 0; i < kPeaks; ++i)
         {
@@ -368,8 +371,30 @@ class Engine
     double hostPpq = 0;
     bool hostPlaying = false;
     float limiter = 1, makeup = 1, inEnv = 1.0e-6f, wetEnv = 1.0e-6f, bypassGain = 1;
+    struct Hp2
+    {
+        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        void set(double srate, float hz)
+        {
+            const float w = std::tan(float(kPiD) * hz / float(srate));
+            const float n = 1.f / (1.f + 1.41421356f * w + w * w);
+            b0 = n; b1 = -2.f * n; b2 = n;
+            a1 = 2.f * (w * w - 1.f) * n;
+            a2 = (1.f - 1.41421356f * w + w * w) * n;
+            resetState();
+        }
+        void resetState() { x1 = x2 = y1 = y2 = 0; }
+        float run(float x)
+        {
+            const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = x; y2 = y1;
+            y1 = std::isfinite(y) ? y : 0.f;
+            return y1;
+        }
+    };
     float hpCoeff = 0.01f, coldHp = 0.01f;
     float hpL = 0, hpR = 0, hpZL = 0, hpZR = 0;
+    Hp2 hateHpL, hateHpR;
     float coldHpL[4]{}, coldHpR[4]{};
 
     std::vector<float> grainL, grainR, haloL, haloR;
@@ -644,6 +669,10 @@ class Engine
 
         oL = clean(resL * 0.70f + tailL * 0.85f + hL * haloAmt * 0.80f);
         oR = clean(resR * 0.70f + tailR * 0.85f + hR * haloAmt * 0.80f);
+        // Extra 2nd-order 180 Hz high-pass on the rift wet path so the low-mids
+        // don't fill up (the input already has a gentler 300 Hz one-pole).
+        oL = hateHpL.run(oL);
+        oR = hateHpR.run(oR);
     }
 
     void decayHateIdle() noexcept

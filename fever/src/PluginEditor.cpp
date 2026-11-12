@@ -256,11 +256,24 @@ void FeverEditor::updateSideLabels()
 {
     const float f = proc.getSettings()[fever::FeverAmt];
     const int side = fever::onHateSide(f) ? 1 : 0;
-    if (side == lastSide)
-        return;
-    lastSide = side;
-    sideAName.setText(fever::sideAName(f), juce::dontSendNotification);
-    sideBName.setText(fever::sideBName(f), juce::dontSendNotification);
+    if (side != lastSide)
+    {
+        lastSide = side;
+        sideAName.setText(fever::sideAName(f), juce::dontSendNotification);
+        sideBName.setText(fever::sideBName(f), juce::dontSendNotification);
+    }
+    // Dim SIDE knobs while FEVER sits at the centre (a wire — they have nothing to do).
+    // Dim HEART RATE / DEPTH while HEART is off.
+    const bool active = fever::loveAmt(f) > 0.02f || fever::hateAmt(f) > 0.02f;
+    const float a = active ? 1.0f : 0.38f;
+    sideA.setAlpha(a);
+    sideB.setAlpha(a);
+    sideAName.setAlpha(a);
+    sideBName.setAlpha(a);
+    const bool heart = proc.getSettings()[fever::Heartbeat] >= 0.5f;
+    const float ha = heart ? 1.0f : 0.38f;
+    depth.setAlpha(ha);
+    depthName.setAlpha(ha);
 }
 
 void FeverEditor::timerCallback()
@@ -380,7 +393,7 @@ void FeverEditor::paint(juce::Graphics &g)
     g.drawText("RIFT", getWidth() - 126, 210, 90, 24, juce::Justification::centred);
 
     // Readable value under the hero
-    juce::String tag = "DRY";
+    juce::String tag = "STILL";
     if (fever::loveAmt(fv) > 0.02f)
         tag = "CLOUD  " + juce::String((int)std::round(fever::loveAmt(fv) * 100));
     else if (fever::hateAmt(fv) > 0.02f)
