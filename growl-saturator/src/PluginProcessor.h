@@ -52,7 +52,7 @@ private:
     {
         std::atomic<float> *inGain, *xover, *subLevel, *subMono, *driveOn, *drive, *satType, *bias, *os,
                            *formantOn, *vowel, *shift, *focus, *fAmt, *lfoRate, *lfoShape, *lfoDepth,
-                           *postOn, *postType, *postCut, *postRes, *mix, *outGain, *limiter;
+                           *postOn, *postType, *postCut, *postRes, *mix, *outGain, *limiter, *gainMatch;
     } P {};
     bool firstBlock = true;
     juce::AudioParameterBool* bypassParam = nullptr;

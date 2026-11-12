@@ -54,7 +54,7 @@ APVTS::ParameterLayout GrowlProcessor::createLayout()
     toggle ("subMono", "Sub Mono", true);
     // drive
     toggle ("driveOn", "Drive On", true);
-    flt ("drive", "Drive", 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, percent());
+    flt ("drive", "Drive", 0.0f, 1.0f, 0.001f, 0.4f, 0.28f, percent());
     choice ("satType", "Saturation Type", StringArray { "Tanh", "Tube", "Fold", "Hard Clip", "Diode" }, 0);
     flt ("bias", "Bias", -1.0f, 1.0f, 0.001f, 1.0f, 0.0f, A().withLabel ("%")
         .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)); })
@@ -65,7 +65,7 @@ APVTS::ParameterLayout GrowlProcessor::createLayout()
     flt ("vowel", "Vowel", 0.0f, 1.0f, 0.001f, 1.0f, 0.4f, A().withStringFromValueFunction (vowelText).withValueFromStringFunction (vowelFromText));
     flt ("shift", "Formant Shift", -12.0f, 12.0f, 0.1f, 1.0f, 0.0f, A().withLabel ("st"));
     flt ("focus", "Focus", 0.0f, 1.0f, 0.001f, 1.0f, 0.5f, percent());
-    flt ("formantAmount", "Formant Amount", 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, percent());
+    flt ("formantAmount", "Formant Amount", 0.0f, 1.0f, 0.001f, 1.0f, 0.3f, percent());
     choice ("lfoRate", "Vowel LFO Rate", StringArray { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 3);
     choice ("lfoShape", "Vowel LFO Shape", StringArray { "Sine", "Triangle", "Saw Up", "Saw Down", "Square" }, 0);
     flt ("lfoDepth", "Vowel LFO Depth", 0.0f, 1.0f, 0.001f, 1.0f, 0.0f, percent());
@@ -78,6 +78,7 @@ APVTS::ParameterLayout GrowlProcessor::createLayout()
     flt ("mix", "Mix", 0.0f, 1.0f, 0.001f, 1.0f, 1.0f, percent());
     flt ("outGain", "Output Gain", -24.0f, 12.0f, 0.1f, 1.0f, 0.0f, A().withLabel ("dB"));
     toggle ("limiter", "Safety Limiter", true);
+    toggle ("gainmatch", "Gain Match", true);
     toggle ("bypass", "Bypass", false);
     return { p.begin(), p.end() };
 }
@@ -91,7 +92,7 @@ GrowlProcessor::GrowlProcessor()
     auto g = [this] (const char* id) { return apvts.getRawParameterValue (id); };
     P = { g ("inGain"), g ("crossover"), g ("subLevel"), g ("subMono"), g ("driveOn"), g ("drive"), g ("satType"), g ("bias"), g ("oversampling"),
           g ("formantOn"), g ("vowel"), g ("shift"), g ("focus"), g ("formantAmount"), g ("lfoRate"), g ("lfoShape"), g ("lfoDepth"),
-          g ("postOn"), g ("postType"), g ("postCut"), g ("postRes"), g ("mix"), g ("outGain"), g ("limiter") };
+          g ("postOn"), g ("postType"), g ("postCut"), g ("postRes"), g ("mix"), g ("outGain"), g ("limiter"), g ("gainmatch") };
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
     presets.keepIds.addIfNotAlreadyThere ("bypass");
     setLatencySamples (gw::kLatency);
@@ -127,7 +128,7 @@ void GrowlProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     p.formantOn = on (P.formantOn); p.vowel = P.vowel->load(); p.formantShift = P.shift->load(); p.focus = P.focus->load();
     p.formantAmount = P.fAmt->load(); p.lfoRate = (int) P.lfoRate->load(); p.lfoShape = (int) P.lfoShape->load(); p.lfoDepth = P.lfoDepth->load();
     p.postOn = on (P.postOn); p.postType = (int) P.postType->load(); p.postCutHz = P.postCut->load(); p.postRes = P.postRes->load();
-    p.mix = P.mix->load(); p.outGainDb = P.outGain->load(); p.limiter = on (P.limiter);
+    p.mix = P.mix->load(); p.outGainDb = P.outGain->load(); p.limiter = on (P.limiter); p.gainMatch = on (P.gainMatch);
     engine.setParams (p);
     if (firstBlock) { engine.snapSmoothers(); bypass.snap (bypassParam->get()); firstBlock = false; }
 
@@ -173,6 +174,11 @@ void GrowlProcessor::setStateInformation (const void* data, int size)
                 if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
                     if (xml->hasAttribute (r->paramID))
                         r->setValueNotifyingHost (r->convertTo0to1 ((float) xml->getDoubleAttribute (r->paramID)));
+            // Old sessions (saved before 1.1.0) have no gainmatch attribute. Leave Match
+            // off so their loudness is unchanged. New instances default to on.
+            if (! xml->hasAttribute ("gainmatch"))
+                if (auto* m = apvts.getParameter ("gainmatch"))
+                    m->setValueNotifyingHost (0.0f);
         }
 }
 

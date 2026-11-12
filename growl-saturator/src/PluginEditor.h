@@ -189,7 +189,7 @@ private:
     GrowlProcessor& proc;
     KnobBox inGain, xover, subLevel, drive, bias, vowel, shift, focus, fAmt, lfoDepth, postCut, postRes, mix, outGain;
     Combo satType, os, lfoRate, lfoShape, postType;
-    Tog subMono, limiter;
+    Tog subMono, limiter, gainMatch;
     Section driveSec, formSec, postSec;
     gwui::VowelView vowelView { proc };
     juce::Rectangle<int> inArea, driveArea, formArea, lfoArea, postArea, outArea, footerArea;

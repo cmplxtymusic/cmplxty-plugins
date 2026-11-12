@@ -411,7 +411,7 @@ GrowlEditor::GrowlEditor (GrowlProcessor& p) : AudioProcessorEditor (&p), proc (
     addCombo (satType, "satType", "TYPE");  addCombo (os, "oversampling", "OVERSAMPLING");
     addCombo (lfoRate, "lfoRate", "LFO RATE"); addCombo (lfoShape, "lfoShape", "LFO SHAPE");
     addCombo (postType, "postType", "FILTER");
-    addTog (subMono, "subMono", "SUB MONO"); addTog (limiter, "limiter", "SAFETY LIMITER");
+    addTog (subMono, "subMono", "SUB MONO"); addTog (limiter, "limiter", "SAFETY LIMITER"); addTog (gainMatch, "gainmatch", "GAIN MATCH");
     addAndMakeVisible (vowelView);
 
     driveSec.members = { &drive.slider, &drive.label, &bias.slider, &bias.label, &satType.box, &satType.label, &os.box, &os.label };
@@ -472,7 +472,7 @@ GrowlEditor::~GrowlEditor()
     for (auto* k : { &inGain, &xover, &subLevel, &drive, &bias, &vowel, &shift, &focus, &fAmt, &lfoDepth, &postCut, &postRes, &mix, &outGain })
     { k->slider.setLookAndFeel (nullptr); k->label.setLookAndFeel (nullptr); }
     for (auto* c : { &satType, &os, &lfoRate, &lfoShape, &postType }) { c->box.setLookAndFeel (nullptr); c->label.setLookAndFeel (nullptr); }
-    for (auto* t : { &subMono, &limiter }) { t->button.setLookAndFeel (nullptr); t->label.setLookAndFeel (nullptr); }
+    for (auto* t : { &subMono, &limiter, &gainMatch }) { t->button.setLookAndFeel (nullptr); t->label.setLookAndFeel (nullptr); }
     for (auto* s : { &driveSec, &formSec, &postSec }) s->power.setLookAndFeel (nullptr);
     banner.setLookAndFeel (nullptr);
     presetBar.setLookAndFeel (nullptr);
@@ -723,9 +723,12 @@ void GrowlEditor::resized()
     }
     { // out
         auto r = body (outArea);
-        auto tg = r.removeFromRight (96).reduced (4, 0);
+        auto tg = r.removeFromRight (118).reduced (2, 0);
         const int w = r.getWidth() / 2;
         knobAt (mix, r.removeFromLeft (w)); knobAt (outGain, r);
+        auto tg1 = tg.removeFromLeft (tg.getWidth() / 2);
+        gainMatch.label.setBounds (tg1.getX() - 4, tg1.getCentreY() - 26, tg1.getWidth() + 8, 16); gainMatch.label.setJustificationType (juce::Justification::centred);
+        gainMatch.button.setBounds (tg1.getCentreX() - 21, tg1.getCentreY() - 6, 42, 18);
         limiter.label.setBounds (tg.getX() - 4, tg.getCentreY() - 26, tg.getWidth() + 8, 16); limiter.label.setJustificationType (juce::Justification::centred);
         limiter.button.setBounds (tg.getCentreX() - 21, tg.getCentreY() - 6, 42, 18);
     }

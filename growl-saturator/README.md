@@ -1,5 +1,7 @@
 # CMPLXTY Growl
 
+**1.1.0:** Gain Match is on for new instances, so the default growl sits at a similar loudness to the input. Drive and Formant start cooler. Drive's knob taper is gentler at the start. Old sessions keep their Drive, Formant and loudness (Match loads off).
+
 Free bass growl saturator by CMPLXTY: a clean mono sub, five saturation types, and a tempo-synced vowel (formant) filter for talking, growling and
 screaming bass. **VST3 + CLAP**, Windows x64 (installer built and tested under Wine only - see *Status*), macOS and Linux build from the same source.
 Licence: **GNU GPL v3** (see `COPYING`). Download page: https://cmplxty.music/plugins/growl-saturator/

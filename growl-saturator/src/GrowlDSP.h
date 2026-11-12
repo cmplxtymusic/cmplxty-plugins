@@ -43,7 +43,7 @@ struct Params
     bool  subMono     = true;     // sum the low band to mono
     // drive
     bool  driveOn     = true;
-    float drive       = 0.5f;     // 0..1  (0 = bypass, up to +42 dB of pre-gain)
+    float drive       = 0.28f;    // 0..1  (0 = bypass, up to +42 dB of pre-gain)
     int   satType     = 0;        // SatType
     float bias        = 0.0f;     // -1..1 asymmetry (DC offset into the shaper, removed afterwards)
     int   oversampling = 2;       // OsMode
@@ -52,7 +52,7 @@ struct Params
     float vowel       = 0.4f;     // 0..1 morph  OO - OH - AH - EH - EE
     float formantShift = 0.0f;    // semitones, -12..+12
     float focus       = 0.5f;     // 0..1 formant sharpness
-    float formantAmount = 1.0f;   // 0..1 blend dry high band -> formant output
+    float formantAmount = 0.3f;   // 0..1 blend dry high band -> formant output
     int   lfoRate     = 3;        // index into kLfoBeats
     int   lfoShape    = 0;
     float lfoDepth    = 0.0f;     // 0..1 (bipolar swing around the vowel knob; 0 = no modulation)
@@ -65,6 +65,7 @@ struct Params
     float mix         = 1.0f;     // 0..1
     float outGainDb   = 0.0f;     // -24..+12
     bool  limiter     = true;     // soft safety limiter (transparent below -1 dBFS)
+    bool  gainMatch   = false;    // product default is ON via the JUCE parameter; tests leave this off
 };
 
 struct Transport
@@ -254,10 +255,12 @@ public:
         for (auto* s : { &sIn, &sXover, &sSub, &sDrive, &sBias, &sVowel, &sShift, &sFocus, &sFAmt, &sDepth, &sPostCut, &sPostRes, &sMix, &sOut })
             s->coef = coef;
         const float swCoef = 1.0f - std::exp (-1.0f / (0.005f * (float) sr)); // 5 ms: section switches and type cross-fades
-        for (auto* s : { &sMono, &sDriveOn, &sFormOn, &sPostOn, &sPostHp, &sLim, &sLfoOut })
+        for (auto* s : { &sMono, &sDriveOn, &sFormOn, &sPostOn, &sPostHp, &sLim, &sMatch, &sLfoOut })
             s->coef = swCoef;
         sLfoOut.coef = 1.0f - std::exp (-1.0f / (0.0015f * (float) sr));      // 1.5 ms LFO de-zipper
         gateCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
+        matchCoef = 1.0f - std::exp (-1.0f / (0.40f * (float) sr));           // ~400 ms K-style window
+        matchFast = 1.0f - std::exp (-1.0f / (0.060f * (float) sr));
         typeStep = 1.0f / std::fmax (1.0f, 0.008f * (float) sr);
         dcR = 1.0f - 2.0f * (float) kPi * 12.0f / (float) sr;
         holdLen = std::max (64, (int) (0.004 * sr));
@@ -274,6 +277,7 @@ public:
         }
         ctl = 0; freePpq = 0.0; osCur = osReq; gate = 1.0f; gateTarget = 1.0f; hold = 0;
         vowelNow = P.vowel;
+        inEnv = wetEnv = 1.0e-16f; makeup = 1.0f; inSqAcc = wetSqAcc = 0;
     }
 
     void setParams (const Params& p)
@@ -305,12 +309,13 @@ public:
         sMix.set (std::fmax (0.f, std::fmin (1.f, P.mix)));
         sOut.set (std::pow (10.0f, std::fmax (-24.f, std::fmin (12.f, P.outGainDb)) / 20.0f));
         sLim.set (P.limiter ? 1.0f : 0.0f);
+        sMatch.set (P.gainMatch ? 1.0f : 0.0f);
     }
 
     void snapSmoothers()
     {
         for (auto* s : { &sIn, &sXover, &sSub, &sMono, &sDriveOn, &sDrive, &sBias, &sFormOn, &sVowel, &sShift, &sFocus, &sFAmt, &sDepth,
-                         &sPostOn, &sPostHp, &sPostCut, &sPostRes, &sMix, &sOut, &sLim })
+                         &sPostOn, &sPostHp, &sPostCut, &sPostRes, &sMix, &sOut, &sLim, &sMatch })
             s->snap (s->target);
         sLfoOut.snap (0.0f);
         typeFrom = typeTo = P.satType; xfading = false; xf = 1.0f;
@@ -452,7 +457,34 @@ public:
 
                 const float wet = lowD + po * gateV;
                 const float dryD = C.dry.read (kLatency);
-                float o = (dryD * (1.0f - mix) + wet * mix) * outG;
+                inSqAcc += dryD * dryD;
+                wetSqAcc += wet * wet;
+                tmpDry[c] = dryD;
+                tmpWet[c] = wet;
+            }
+            // Automatic gain match (same idea as FEVER / RIGGED): a ~400 ms mean-square
+            // window, then a makeup gain so the wet path sits at the same loudness as the
+            // input. On for new instances; old saved sessions load with it off.
+            const float nn = (float) std::max (1, n);
+            inEnv += matchCoef * (inSqAcc / nn - inEnv);
+            wetEnv += matchCoef * (wetSqAcc / nn - wetEnv);
+            if (inEnv < 1.0e-16f) inEnv = 1.0e-16f;
+            if (wetEnv < 1.0e-16f) wetEnv = 1.0e-16f;
+            const float matchA = sMatch.next();
+            float want = 1.0f;
+            if (matchA > 0.5f)
+                want = std::fmax (0.01f, std::fmin (100.0f, std::sqrt (inEnv / wetEnv)));
+            else
+                want = 1.0f;
+            const float gap = std::fabs (20.0f * std::log10 (std::fmax (want, 1.0e-6f))
+                                       - 20.0f * std::log10 (std::fmax (makeup, 1.0e-6f)));
+            const float ms = gap > 0.8f ? matchFast : matchCoef;
+            makeup += ms * (want - makeup);
+            makeup += (1.0f - matchA) * (1.0f - makeup) * matchFast;   // release to 1 when Match is off
+            inSqAcc = wetSqAcc = 0;
+            for (int c = 0; c < n; ++c)
+            {
+                float o = (tmpDry[c] * (1.0f - mix) + tmpWet[c] * makeup * mix) * outG;
                 o = o + lim * (softLimit (o) - o);
                 io[c][i] = sanitize (o);
             }
@@ -470,12 +502,14 @@ private:
     double sr = 44100.0; int nch = 2;
     Params P;
     detail::Smooth sIn, sXover, sSub, sMono, sDriveOn, sDrive, sBias, sFormOn, sVowel, sShift, sFocus, sFAmt, sDepth,
-                   sPostOn, sPostHp, sPostCut, sPostRes, sMix, sOut, sLim, sLfoOut;
+                   sPostOn, sPostHp, sPostCut, sPostRes, sMix, sOut, sLim, sMatch, sLfoOut;
     detail::SvfCoef xoCoef[2], fmCoef[3], postCoef; float fmW[3] {};
     Xo xo[kMaxChannels]; Ch ch[kMaxChannels];
     int ctl = 0; double freePpq = 0.0; float vowelNow = 0.4f;
     int osCur = 0, osReq = 0, hold = 0, holdLen = 192; float gate = 1.0f, gateTarget = 1.0f, gateCoef = 0.01f;
     int typeFrom = 0, typeTo = 0; float xf = 1.0f, typeStep = 0.01f; bool xfading = false;
     float dcR = 0.999f;
+    float inEnv = 1.0e-16f, wetEnv = 1.0e-16f, makeup = 1.0f, matchCoef = 0.001f, matchFast = 0.01f;
+    float inSqAcc = 0, wetSqAcc = 0, tmpDry[kMaxChannels] {}, tmpWet[kMaxChannels] {};
 };
 } // namespace gw
