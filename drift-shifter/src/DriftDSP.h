@@ -179,7 +179,7 @@ public:
     {
         sr = std::max (8000.0, sampleRate); nch = std::max (1, std::min (kMaxChannels, channels));
         auto tc = [this] (double sec) { return 1.0 - std::exp (-1.0 / (sec * sr)); };
-        aShift = tc (0.015); aGain = tc (0.010); aXo = tc (0.015);
+        aShift = tc (0.015); aGain = tc (0.010); aXo = tc (0.015); aDry = tc (0.008);
         reset();
     }
 
@@ -237,6 +237,14 @@ public:
         const double base = std::clamp ((double) p.coarseHz + (double) p.fineHz, -maxShift, maxShift);
         const double half = p.wide ? (double) p.spreadHz * 0.5 : 0.0;
         const double sgn[2] = { -1.0, 1.0 };
+        // True dry at 0 Hz: when there is nothing to shift (coarse, fine, spread, feedback
+        // and key-track all at zero, or Shift is off), cross-fade to a bit-transparent copy
+        // of the input. The Hilbert path keeps running so engaging a shift is click-free.
+        const bool wantDry = (! p.shiftOn)
+                          || (std::fabs (base) < 1.0e-9
+                              && std::fabs (half) < 1.0e-9
+                              && std::fabs ((double) p.feedback) < 1.0e-9
+                              && ! p.keyOn);
 
         if (snap)
         {
@@ -246,7 +254,7 @@ public:
                 const double s = (nch == 1) ? 0.0 : sgn[c] * half;
                 ch[c].shiftCur = std::clamp (base + keyTarget + s, -maxShift, maxShift);
             }
-            slopeCur = p.slope; coefL.set (xoLc, sr, slopeCur); coefH.set (xoHc, sr, slopeCur); snap = false;
+            slopeCur = p.slope; coefL.set (xoLc, sr, slopeCur); coefH.set (xoHc, sr, slopeCur); dryAmt = wantDry ? 1.0 : 0.0; snap = false;
         }
         if (p.slope != slopeCur) { slopeCur = p.slope; for (auto& c : ch) c.resetFilters(); coefL.set (xoLc, sr, slopeCur); coefH.set (xoHc, sr, slopeCur); }
 
@@ -255,6 +263,10 @@ public:
             wl += aGain * (tgtWl - wl); wh += aGain * (tgtWh - wh);
             gl += aGain * (tgtGl - gl); gm += aGain * (tgtGm - gm); gh += aGain * (tgtGh - gh);
             mixC += aGain * (tgtMix - mixC); fbC += aGain * (tgtFb - fbC);
+            const double tgtDry = wantDry ? 1.0 : 0.0;
+            dryAmt += aDry * (tgtDry - dryAmt);
+            if (dryAmt > 0.999999) dryAmt = 1.0;
+            if (dryAmt < 1.0e-7) dryAmt = 0.0;
             keyCur += aShift * (keyTarget - keyCur);
             xoLc += aXo * (xoL - xoLc); xoHc += aXo * (xoH - xoHc);
             if (++ctlCounter >= kCtlInterval) { ctlCounter = 0; coefL.set (xoLc, sr, slopeCur); coefH.set (xoHc, sr, slopeCur); }
@@ -288,8 +300,11 @@ public:
                 const double dry = s.dryI.tick (midU);
                 const double lowO = s.lowI.tick (lowU), highO = s.highI.tick (highU);
                 const double y = gl * lowO + gh * highO + gm * ((1.0 - mixC) * dry + mixC * S);
-                chans[c][i] = (float) y;
-                inMono += x; outMono += y;
+                const double out = dryAmt * x + (1.0 - dryAmt) * y;
+                // Snap to exact input once the crossfade has settled, so a null test at 0 Hz is digital-zero.
+                const double o = (dryAmt >= 0.999999) ? x : out;
+                chans[c][i] = (float) o;
+                inMono += x; outMono += o;
             }
             if (tapOn) { const double k = 1.0 / std::max (1, nc); tapIn.push ((float) (inMono * k)); tapOut.push ((float) (outMono * k)); }
         }
@@ -315,8 +330,8 @@ private:
     Chan ch[kMaxChannels];
     XoverCoefs coefL, coefH;
     Params target;
-    double sr = 48000.0, aShift = 0.001, aGain = 0.002, aXo = 0.001;
-    double wl = 1, wh = 1, gl = 1, gm = 1, gh = 1, mixC = 1, fbC = 0, xoLc = 200, xoHc = 4000, keyCur = 0;
+    double sr = 48000.0, aShift = 0.001, aGain = 0.002, aXo = 0.001, aDry = 0.002;
+    double wl = 1, wh = 1, gl = 1, gm = 1, gh = 1, mixC = 1, fbC = 0, xoLc = 200, xoHc = 4000, keyCur = 0, dryAmt = 1;
     int nch = 2, slopeCur = Slope48, ctlCounter = 0, heldCount = 0;
     bool snap = true;
     std::array<int, 16> held {};

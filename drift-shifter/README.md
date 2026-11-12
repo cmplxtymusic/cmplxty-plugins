@@ -1,5 +1,7 @@
 # CMPLXTY Drift
 
+**1.1.0:** At 0 Hz shift the plugin is now a true wire (a perfect null against the input). Previously the Hilbert path stayed in and added a phasey delay even with Coarse and Fine at zero. Existing sessions at 0 Hz will lose that colour — they will sound like the original track. Moving the shift still uses the Hilbert shifter.
+
 Free selective-band frequency shifter by CMPLXTY. Split the signal into low / mid / high with two crossovers, and shift only the middle band
 up or down by a fixed number of Hz (not semitones), so the lows stay solid and the highs stay clean while the middle drifts, rings and goes
 metallic or detuned. **VST3 + CLAP**, Windows x64 (installer built and tested under Wine only, see *Status*). macOS and Linux build from
