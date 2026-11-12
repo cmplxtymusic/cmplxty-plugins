@@ -171,7 +171,7 @@ public:
         std::fill (tapeL.begin(), tapeL.end(), 0.0f); std::fill (tapeR.begin(), tapeR.end(), 0.0f); tapeW = 0;
         std::fill (dlyL.begin(), dlyL.end(), 0.0f); std::fill (dlyR.begin(), dlyR.end(), 0.0f); dlyW = 0; dlyLp[0] = dlyLp[1] = 0;
         for (auto& l : rv) { std::fill (l.buf.begin(), l.buf.end(), 0.0f); l.w = 0; l.lp = 0; }
-        crushPh = 1; crushL = crushR = 0; ageL = ageR = 0; wowPh = flPh = 0; wowRnd = wowRndT = 0; lim = 1; arpOn = false; arpCtr = 0; arpIdx = -1; arpDir = 1; arpPlaying.clear();
+        crushPh = 1; crushL = crushR = 0; ageL = ageR = 0; ageEnv = 0; wowPh = flPh = 0; wowRnd = wowRndT = 0; lim = 1; arpOn = false; arpCtr = 0; arpIdx = -1; arpDir = 1; arpPlaying.clear();
         dTime = -1; rack.reset();
     }
     void setParams (const Params& np)
@@ -491,10 +491,42 @@ private:
                 tapeW = (tapeW + 1) % (int) tapeL.size();
                 if (P.age > 0)
                 {
+                    // Tape Age saturates and adds hiss, but the hiss follows the sound: it is
+                    // scaled by a short envelope of the tape input plus leftover delay/reverb
+                    // energy, and flushed to exact zero when the synth is idle. Previously the
+                    // hiss ran on every sample whenever Age was up, which left a constant
+                    // -65 to -74 dBFS floor on factory presets (Pale Static, Tape Funeral, …)
+                    // even with no notes and the transport stopped.
                     ageL += (l - ageL) * ageA; ageR += (r - ageR) * ageA;
                     const float sat = 1.0f + P.age * 2.0f;
-                    l = std::tanh (ageL * sat) / sat * (1.0f + P.age * 0.6f) + tapeRng.next() * P.age * 0.003f;
-                    r = std::tanh (ageR * sat) / sat * (1.0f + P.age * 0.6f) + tapeRng.next() * P.age * 0.003f;
+                    float tank = 0;
+                    if (dly) tank += dlyLp[0] * dlyLp[0] + dlyLp[1] * dlyLp[1];
+                    if (rev)
+                        for (int k = 0; k < 8; ++k)
+                        {
+                            const float v = rv[(size_t) k].lp;
+                            tank += v * v;
+                        }
+                    const float inst = l * l + r * r + tank;
+                    const float atk = 1.0f - std::exp (-1.0f / (0.005f * sr));
+                    const float rel = 1.0f - std::exp (-1.0f / (0.080f * sr));
+                    ageEnv += (inst - ageEnv) * (inst > ageEnv ? atk : rel);
+                    const bool idle = ageEnv < 1.0e-16f
+                                   && std::fabs (ageL) + std::fabs (ageR) < 1.0e-9f
+                                   && std::fabs (l) + std::fabs (r) < 1.0e-9f
+                                   && tank < 1.0e-16f;
+                    if (idle)
+                    {
+                        l = r = ageL = ageR = 0;
+                        ageEnv = 0;
+                    }
+                    else
+                    {
+                        const float gate = ageEnv / (ageEnv + 1.0e-8f);
+                        const float hiss = P.age * 0.003f * gate;
+                        l = std::tanh (ageL * sat) / sat * (1.0f + P.age * 0.6f) + tapeRng.next() * hiss;
+                        r = std::tanh (ageR * sat) / sat * (1.0f + P.age * 0.6f) + tapeRng.next() * hiss;
+                    }
                 }
             }
             if (rack.active()) rack.process (l, r);
@@ -540,7 +572,7 @@ private:
         }
         scopePos.store (sp, std::memory_order_relaxed);
         outPeak.store (std::max (pk, outPeak.load (std::memory_order_relaxed) * 0.9f), std::memory_order_relaxed);
-        crushL = clean (crushL); crushR = clean (crushR); dlyLp[0] = clean (dlyLp[0]); dlyLp[1] = clean (dlyLp[1]); ageL = clean (ageL); ageR = clean (ageR);
+        crushL = clean (crushL); crushR = clean (crushR); dlyLp[0] = clean (dlyLp[0]); dlyLp[1] = clean (dlyLp[1]); ageL = clean (ageL); ageR = clean (ageR); ageEnv = clean (ageEnv);
     }
 
     Params P;
@@ -557,7 +589,7 @@ private:
     uint64_t counter = 0;
     double vibPh = 0, pwmPh = 0, wowPh = 0, flPh = 0;
     // post
-    float crushPh = 1, crushL = 0, crushR = 0, ageL = 0, ageR = 0, wowRnd = 0, wowRndT = 0, lim = 1, dTime = -1;
+    float crushPh = 1, crushL = 0, crushR = 0, ageL = 0, ageR = 0, ageEnv = 0, wowRnd = 0, wowRndT = 0, lim = 1, dTime = -1;
     std::vector<float> tapeL, tapeR, dlyL, dlyR; int tapeW = 0, dlyW = 0; float dlyLp[2] {};
     std::array<RvLine, 8> rv;
 };

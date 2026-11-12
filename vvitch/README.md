@@ -4,6 +4,9 @@ Free witch house polysynth by CMPLXTY: glassy detuned saws, chip-crushed leads, 
 reverb. It is inspired by the sound of witch house and early-2010s dark electronic acts (Crystal Castles and friends) but is its own
 design and not a clone of any product. Instrument plug-in: MIDI in, stereo out, zero latency.
 
+**1.1.1:** Tape Age hiss now follows the sound and goes to true silence when you are not playing. The Age colour is still there on notes and tails. Factory presets such as Pale Static and Tape Funeral no longer leave a constant background hiss on an unused track.
+
+
 ### Controls
 1. **OSCILLATOR 1 / 2**: **Wave** Saw / Square / PWM / Triangle (polyBLEP, alias-suppressed), Osc 1 **Octave** ±2, Osc 2 **Semi** ±24 and
    **Fine** ±50 ct, **Level**.

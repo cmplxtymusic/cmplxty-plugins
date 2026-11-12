@@ -79,6 +79,38 @@ int main()
         Engine e; e.prepare (SR); auto p = pure(); p.voices = 1; p.glide = 0.3f; e.setParams (p); e.noteOn (57, 1); run (e, 24000); e.noteOn (69, 1);
         auto o = run (e, 4800); const double f = freqOf (o.l, 0, 4800); check (f > 225 && f < 400, "glide: mid-way pitch between the notes");
     }
+    {   // Tape Age hiss is gated: idle is true silence, a held note still has tape character
+        Engine e; e.prepare (SR);
+        Params p; p.age = 0.8f; p.wow = 0.8f; p.flutter = 0.6f; p.revMix = 0.5f; p.revSize = 0.9f; p.dlyMix = 0.3f;
+        e.setParams (p);
+        auto o = run (e, 48000 * 32);
+        const double idleRms = std::max (rms (o.l), rms (o.r));
+        std::printf ("  age 0.8, no notes, 32 s RMS = %.3e\n", idleRms);
+        check (idleRms == 0.0, "Age 0.8 with no notes is true digital silence (32 s)");
+
+        Engine a, b; a.prepare (SR); b.prepare (SR);
+        auto dry = pure(); dry.age = 0; dry.wow = 0; dry.flutter = 0; dry.revMix = 0; dry.dlyMix = 0;
+        auto wet = dry; wet.age = 0.8f;
+        a.setParams (dry); b.setParams (wet);
+        a.noteOn (60, 1); b.noteOn (60, 1);
+        auto od = run (a, 48000); auto ow = run (b, 48000);
+        // compare a mid window after the attack
+        double d = 0, e2 = 0; int n = 0;
+        for (size_t i = 12000; i < 36000; ++i)
+        {
+            const double x = (double) ow.l[i] - (double) od.l[i];
+            d += x * x; e2 += (double) ow.l[i] * ow.l[i]; ++n;
+        }
+        const double resid = std::sqrt (d / n), wetRms = std::sqrt (e2 / n);
+        std::printf ("  held note, Age 0 vs 0.8 residual RMS = %.4f (wet RMS %.4f)\n", resid, wetRms);
+        check (resid > 0.01 && wetRms > 0.05, "Age 0.8 is clearly audible on a held note");
+        a.noteOff (60); b.noteOff (60);
+        // after a long release + reverb, both should return to silence
+        run (a, 48000 * 4); auto tail = run (b, 48000 * 8);
+        const double after = std::max (rms (tail.l, 48000 * 6, 48000 * 8), rms (tail.r, 48000 * 6, 48000 * 8));
+        std::printf ("  Age 0.8 after note, last 2 s of 8 s = %.3e\n", after);
+        check (after < 1e-6, "Age 0.8 decays back to silence after the note");
+    }
     {   // CPU
         Engine e; e.prepare (SR); Params p; p.uni = 7; p.vox = 0.5f; p.voices = 12; p.revMix = 0.4f; p.dlyMix = 0.3f; p.wow = 0.5f; p.chipMix = 0.5f; p.bits = 6; e.setParams (p);
         for (int n = 0; n < 12; ++n) e.noteOn (48 + n * 2, 0.8f);
