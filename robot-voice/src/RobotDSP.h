@@ -1,4 +1,5 @@
 #pragma once
+#include "Oversampler.h"
 // CMPLXTY Robot Voice DSP (no JUCE): pitch tracker + scale snap (hard retune), two-tap pitch shifter, channel vocoder with an
 // internal carrier that follows the snapped pitch (or a MIDI note), ring modulator, dry/wet + output gain.
 // Everything runs per sample, so the result does not depend on the host block size.
@@ -152,6 +153,7 @@ public:
         for (auto& s : shift) s.prepare (fs);
         lastBands = -1; ringPh = 0; oscPh = 0; rng = 0x1234567u;
         detMidi = 0; targetMidi = 0; shiftSt = 0; carHz = 110; voiced = false;
+        for (auto& o : ringOs) { o.setFactor (4); o.reset(); }
         sMix = p.mix; sGain = std::pow (10.0f, p.gainDb / 20.0f); sRingHz = p.ringHz; sRingMix = p.ringOn ? p.ringMix : 0.0f; sVoc = p.vocOn ? p.vocMix : 0.0f;
         setupBands();
         for (auto& l : levels) l.store (0.0f);
@@ -230,7 +232,20 @@ public:
                     }
                     y = y + (v * makeup - y) * sVoc;
                 }
-                if (sRingMix > 1.0e-4f) y *= 1.0f - sRingMix + sRingMix * std::sin (2.0f * (float) kPi * ringPh);
+                if (sRingMix > 1.0e-4f)
+                {
+                    // 4x oversampled ring so the products of the carrier and the
+                    // modulator don't fold back as fizz around 15 kHz.
+                    float hi[4];
+                    ringOs[(size_t) c].up (y, hi);
+                    const float dph = sRingHz / (4.0f * (float) sr);
+                    for (int k = 0; k < 4; ++k)
+                    {
+                        const float ph = ringPh + dph * (float) k;
+                        hi[k] *= 1.0f - sRingMix + sRingMix * std::sin (2.0f * (float) kPi * ph);
+                    }
+                    y = ringOs[(size_t) c].down (hi);
+                }
                 out[c] = (dry[c] + (y - dry[c]) * sMix) * sGain;
                 if (! std::isfinite (out[c])) out[c] = 0.0f;
             }
@@ -280,6 +295,7 @@ private:
     float nextNoise() { rng = rng * 1664525u + 1013904223u; return (float) (int32_t) rng * (1.0f / 2147483648.0f); }
 
     double sr = 48000; int nch = 2, nb = 16, lastBands = -1, midiNote = -1;
+    cmx::Oversampler ringOs[2];
     Params p; PitchTracker tracker; Shifter shift[2];
     std::array<Band, kMaxBands> bands {};
     float atk = 0.01f, rel = 0.001f, ringPh = 0, oscPh = 0, detMidi = 0, targetMidi = 0, shiftSt = 0, carHz = 110;

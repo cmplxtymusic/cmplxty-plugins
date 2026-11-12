@@ -1,5 +1,7 @@
 # CMPLXTY Robot Voice
 
+**1.0.3:** The ring modulator is oversampled, so high-frequency fizz is much quieter. Idle is still true silence. The default mix is unchanged.
+
 Free robot-voice effect by CMPLXTY: hard **pitch snap** to a key and scale, a **channel vocoder** whose built-in carrier follows the
 snapped pitch (or the MIDI notes you play), and a **ring modulator**, in one chain. Inspired by the classic robot / talk-box vocal sounds.
 It is its own design and not a clone of any product.
