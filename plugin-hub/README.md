@@ -12,7 +12,11 @@ One window to install, update or reinstall every CMPLXTY VST3/CLAP plug-in (Wind
 - Presets/settings (`%APPDATA%\CMPLXTY`, `%APPDATA%\Quartz`, `~/Library/CMPLXTY`, `~/Library/Quartz`) are never written to. They are
   backed up to the hub's work folder before every run, hashed before and after, and any missing or changed file is restored.
 - Installing runs each plug-in's own installer: Windows `Setup.exe /S /ALLUSERS` (the hub exe requests admin once), macOS
-  `installer -pkg` under one admin prompt. Plug-ins you don't tick are never touched.
+  `installer -pkg` under one admin prompt. Plug-ins you don't tick are never touched. On refresh the hub auto-ticks every
+  new or outdated plug-in (never up-to-date or NO CHECKSUM rows). Select-all does the same. An already-current plug-in is
+  skipped even if it is ticked ("already up to date, skipped") — no download and no file changes. Right-click or Shift/Alt-click
+  a single up-to-date row to force a reinstall/repair. The main button shows only what will change (`Install 2 · Update 1`)
+  or `Everything up to date` when there's nothing to do.
 - Self-update: `cmplxty.music/plugins/plugin-hub/version.json`, falling back to `plugin-hub-v*` GitHub releases. The banner only opens the page.
 
 Build: `scripts/fetch-deps.sh`, then `cmake -S . -B build/linux -G Ninja && cmake --build build/linux --target PluginHub PluginHubTest`.

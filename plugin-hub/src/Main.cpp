@@ -137,39 +137,66 @@ private:
         g.drawText (p.installed.isEmpty() ? juce::String ("-") : p.installed == "unknown" ? juce::String ("? (unreadable)") : p.installed, 366, 0, 90, h, juce::Justification::centredLeft);
         g.setColour (kFg); g.drawText (p.latest, 456, 0, 80, h, juce::Justification::centredLeft);
         auto a = p.action();
-        juce::String act = ! p.checksumOk() ? "NO CHECKSUM" : a == hub::Action::Reinstall && ! on ? "UP TO DATE" : hub::actionName (a);
+        juce::String act = ! p.checksumOk() ? "NO CHECKSUM" : a == hub::Action::Reinstall && ! (on && p.force) ? "UP TO DATE" : hub::actionName (a);
         g.setFont (font (12.0f, true)); g.setColour (a == hub::Action::Update || (on && p.checksumOk()) ? kFg : kDim);
         g.drawText (act, 546, 0, w - 546, h, juce::Justification::centredLeft);
         if (resultText.count (p.slug)) { g.setFont (font (10.5f)); g.setColour (kDim); g.drawText (resultText[p.slug], 546, h - 16, w - 546, 14, juce::Justification::centredLeft); }
     }
-    void listBoxItemClicked (int row, const juce::MouseEvent&) override { toggleRow (row); }
+    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() || e.mods.isShiftDown() || e.mods.isAltDown()) forceToggle (row);
+        else toggleRow (row);
+    }
     void returnKeyPressed (int row) override { toggleRow (row); }
     void toggleRow (int row)
     {
         if (busy || ! juce::isPositiveAndBelow (row, plugins.size()) || ! plugins[row].checksumOk()) return;
-        checked.set (row, ! checked[row]); changed();
+        bool on = ! checked[row];
+        checked.set (row, on);
+        if (! on) plugins.getReference (row).force = false;
+        changed();
+    }
+    // Right-click or Shift/Alt-click: force a repair of a single up-to-date (or downgrade) row.
+    void forceToggle (int row)
+    {
+        if (busy || ! juce::isPositiveAndBelow (row, plugins.size()) || ! plugins[row].checksumOk()) return;
+        auto& p = plugins.getReference (row);
+        auto a = p.action();
+        if (a == hub::Action::Reinstall || a == hub::Action::Downgrade)
+        {
+            bool on = ! (checked[row] && p.force);
+            checked.set (row, on); p.force = on;
+        }
+        else toggleRow (row);
+        changed();
     }
     juce::Rectangle<int> selectAllBox() const { return { 36, 77, 16, 16 }; }
-    // 0 = none ticked, 1 = some, 2 = every installable row ticked
+    // 0 = none ticked, 1 = some, 2 = every Install/Update row ticked
     int selectState() const
     {
         int can = 0, on = 0;
-        for (int i = 0; i < plugins.size(); ++i) if (plugins.getReference (i).checksumOk()) { ++can; on += checked[i] ? 1 : 0; }
+        for (int i = 0; i < plugins.size(); ++i)
+            if (hub::needsAction (plugins.getReference (i))) { ++can; on += checked[i] ? 1 : 0; }
         return on == 0 ? 0 : on == can ? 2 : 1;
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (busy || ! selectAllBox().expanded (6).contains (e.getPosition())) return;
-        bool all = selectState() != 2;   // empty or partial -> tick all; full -> clear
-        for (int i = 0; i < plugins.size(); ++i) checked.set (i, all && plugins.getReference (i).checksumOk());
+        bool all = selectState() != 2;   // empty or partial -> tick Install/Update; full -> clear
+        for (int i = 0; i < plugins.size(); ++i)
+        {
+            bool on = all && hub::needsAction (plugins.getReference (i));
+            checked.set (i, on);
+            if (! on) plugins.getReference (i).force = false;
+        }
         changed();
     }
     void changed()
     {
-        int n = 0; for (int i = 0; i < plugins.size(); ++i) n += checked[i] && plugins.getReference (i).checksumOk() ? 1 : 0;
         auto label = hub::primaryLabel (plugins, checked);
-        goBtn.setButtonText (n == 0 ? juce::String ("Install") : label + " (" + juce::String (n) + ")");
-        goBtn.setEnabled (n > 0 && ! busy);
+        bool actionable = label.isNotEmpty() && label != "Everything up to date";
+        goBtn.setButtonText (label.isEmpty() ? juce::String ("Install") : label);
+        goBtn.setEnabled (actionable && ! busy);
         int inst = 0; for (int i = 0; i < plugins.size(); ++i) inst += checked[i] && plugins.getReference (i).installed.isNotEmpty() ? 1 : 0;
         uninstallBtn.setButtonText (inst == 0 ? juce::String ("Uninstall") : "Uninstall (" + juce::String (inst) + ")");
         uninstallBtn.setEnabled (inst > 0 && ! busy);
@@ -202,7 +229,7 @@ private:
             juce::MessageManager::callAsync ([this, got, ok, err, upd, safe = juce::Component::SafePointer<HubComponent> (this)]
             {
                 if (! safe) return;
-                if (ok) { plugins = got; checked.clear(); for (auto& p : plugins) checked.add (p.action() == hub::Action::Update); }
+                if (ok) { plugins = got; checked = hub::defaultSelection (plugins); }
                 int inst = 0, upds = 0; for (auto& p : plugins) { inst += p.installed.isNotEmpty(); upds += p.action() == hub::Action::Update; }
                 status = ok ? juce::String (plugins.size()) + " plugins available  /  " + juce::String (inst) + " installed  /  " + juce::String (upds) + " update(s)"
                                + (err.isNotEmpty() ? "  (" + err + ")" : juce::String())
@@ -225,7 +252,12 @@ private:
             {
                 if (! safe) return;
                 int ok = 0, cancelled = 0;
-                for (auto& r : results) { ok += r.ok; cancelled += r.message == "cancelled"; resultText[r.slug] = r.ok ? (uninstall ? "removed" : "done") : r.message.substring (0, 60); }
+                for (auto& r : results)
+                {
+                    ok += r.ok; cancelled += r.message == "cancelled";
+                    resultText[r.slug] = r.message.isNotEmpty() && (r.message != "installed") ? r.message.substring (0, 60)
+                                                                                              : juce::String (r.ok ? (uninstall ? "removed" : "done") : r.message);
+                }
                 lastResult = juce::String (ok) + " of " + juce::String (results.size()) + (uninstall ? " removed." : " done.")
                          + (cancelled > 0 ? " " + juce::String (cancelled) + " cancelled." : juce::String())
                          + (ok < results.size() ? " See the row notes for what failed." : juce::String()) + " Rescan your plug-ins in the DAW.";

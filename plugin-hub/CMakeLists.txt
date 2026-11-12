@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(PluginHub VERSION 1.0.3 LANGUAGES C CXX)
+project(PluginHub VERSION 1.0.4 LANGUAGES C CXX)
 if(UNIX AND NOT APPLE)
     add_compile_definitions(JUCE_USE_XINPUT=0)
 endif()

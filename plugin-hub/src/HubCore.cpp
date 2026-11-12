@@ -179,6 +179,8 @@ Layout Layout::prefix (const File& root, Platform p)
 }
 
 // ------------------------------------------------------------------------------------------------ catalog
+// Display labels only — a slug does not have to be listed to appear in the catalog (unknown slugs are "FX").
+// applyVersionJson can override this from a version.json "type" field, so a new plugin needs no Hub code change.
 String typeFor (const String& slug)
 {
     static const std::map<String, String> t {
@@ -204,13 +206,41 @@ String actionName (Action a)
     return {};
 }
 
+bool needsAction (const Plugin& p)
+{
+    if (! p.checksumOk()) return false;
+    auto a = p.action();
+    return a == Action::Install || a == Action::Update;
+}
+
+bool shouldSkipAsUpToDate (const Plugin& p)
+{
+    return p.action() == Action::Reinstall && ! p.force;
+}
+
+juce::Array<bool> defaultSelection (const juce::Array<Plugin>& list)
+{
+    juce::Array<bool> out;
+    for (auto& p : list) out.add (needsAction (p));
+    return out;
+}
+
 String primaryLabel (const juce::Array<Plugin>& list, const juce::Array<bool>& checked)
 {
-    int inst = 0, upd = 0;
+    int inst = 0, upd = 0, needed = 0;
     for (int i = 0; i < list.size(); ++i)
-        if (checked[i] && list.getReference (i).checksumOk()) (list.getReference (i).action() == Action::Update ? upd : inst)++;
-    if (inst + upd == 0) return {};
-    return upd == 0 ? "Install" : inst == 0 ? "Update" : "Install / Update";
+    {
+        auto& p = list.getReference (i);
+        if (! p.checksumOk()) continue;
+        if (needsAction (p)) ++needed;
+        if (i >= checked.size() || ! checked[i] || shouldSkipAsUpToDate (p)) continue;
+        (p.action() == Action::Update ? upd : inst)++;
+    }
+    if (inst + upd == 0) return needed == 0 ? String ("Everything up to date") : String();
+    juce::StringArray parts;
+    if (inst > 0) parts.add ("Install " + String (inst));
+    if (upd > 0) parts.add ("Update " + String (upd));
+    return parts.joinIntoString (" · ");
 }
 
 static bool isPlatformInstaller (const String& n, Platform p)
@@ -269,6 +299,9 @@ void applyVersionJson (Plugin& pl, const String& text, Platform p)
     if (url != pl.url || compareVersions (block["version"].toString(), pl.latest) != 0) return;   // stale / other release
     if (sha.length() == 64 && sha.containsOnly ("0123456789abcdef")) pl.sha256 = sha;
     pl.notes = block["notes"].toString().substring (0, 200);
+    auto typ = block["type"].toString().trim();
+    if (typ.isEmpty()) typ = v["type"].toString().trim();
+    if (typ.isNotEmpty()) pl.type = typ.substring (0, 40);
 }
 
 String parseSumsFile (const String& text, const String& fileName)
@@ -584,8 +617,24 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
     auto cancelled = [&] { return cancel != nullptr && cancel->load(); };
     l.work.createDirectory();
 
+    // Up-to-date rows are skipped here (even if ticked) — no download and no file changes — unless force is set.
+    juce::Array<int> todo;
+    for (int i = 0; i < sel.size(); ++i)
+    {
+        auto& pl = sel.getReference (i);
+        Result r; r.slug = pl.slug;
+        if (shouldSkipAsUpToDate (pl))
+        {
+            r.ok = true; r.message = "already up to date, skipped";
+            say ((pl.name.isNotEmpty() ? pl.name : pl.slug) + ": already up to date, skipped");
+        }
+        else todo.add (i);
+        results.add (r);
+    }
+    if (todo.isEmpty()) return results;
+
     // batch-wide progress: downloads are 85% of the bar (weighted by size), installs the last 15%
-    juce::int64 totalBytes = 0; for (auto& pl : sel) totalBytes += juce::jmax ((juce::int64) 1, pl.size);
+    juce::int64 totalBytes = 0; for (auto i : todo) totalBytes += juce::jmax ((juce::int64) 1, sel.getReference (i).size);
     juce::int64 bytesDone = 0; int installsDone = 0, installsTotal = 0;
     auto report = [&] (juce::int64 cur)
     {
@@ -597,10 +646,10 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
 
     // 1. download + verify everything first, so nothing is replaced unless every file is good
     juce::Array<File> files; juce::Array<int> ready;
-    for (int i = 0; i < sel.size(); ++i)
+    for (auto i : todo)
     {
         auto& pl = sel.getReference (i);
-        Result r; r.slug = pl.slug;
+        auto& r = results.getReference (i);
         auto dest = l.work.getChildFile ("downloads").getChildFile (pl.tag).getChildFile (pl.assetName);
         String err;
         if (cancelled()) r.message = "cancelled";
@@ -615,16 +664,19 @@ juce::Array<Result> installSelected (juce::Array<Plugin>& sel, const Layout& l, 
         }
         bytesDone += juce::jmax ((juce::int64) 1, pl.size); report (0);
         if (r.ok) { files.add (dest); ready.add (i); } else say (pl.name + ": " + r.message);
-        results.add (r);
     }
-    if (cancelled()) { for (auto& r : results) if (r.ok) { r.ok = false; r.message = "cancelled"; } say ("Cancelled - nothing was changed."); return results; }
+    if (cancelled())
+    {
+        for (auto i : todo) { auto& r = results.getReference (i); if (r.ok) { r.ok = false; r.message = "cancelled"; } }
+        say ("Cancelled - nothing was changed."); return results;
+    }
     if (ready.isEmpty()) return results;
     installsTotal = ready.size();
 
     // 2. presets: snapshot + backup
     auto before = snapshot (l.presetRoots);
     String err; auto backup = backupPresets (l, err);
-    if (backup == File()) { for (auto& r : results) if (r.ok) { r.ok = false; r.message = err; } say (err); return results; }
+    if (backup == File()) { for (auto i : ready) { auto& r = results.getReference (i); if (r.ok) { r.ok = false; r.message = err; } } say (err); return results; }
     say ("Presets backed up (" + String ((int) before.files.size()) + " files) to " + backup.getFullPathName());
 
     // 3. install (cancel stops before the next plug-in; one that is already running finishes)

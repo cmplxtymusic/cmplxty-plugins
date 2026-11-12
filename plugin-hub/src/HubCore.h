@@ -58,12 +58,19 @@ struct Plugin
     juce::String assetName, url, sha256; juce::int64 size = 0;
     juce::String installed;            // "" = not installed
     juce::File installedVst3, installedClap;
+    bool force = false;                // user asked to repair this one even if it's already up to date
     bool checksumOk() const { return sha256.length() == 64; }
     Action action() const;
 };
 juce::String actionName (Action);
-// Main button wording for the ticked rows: "Install" (only new / reinstall), "Update" (only updates),
-// "Install / Update" (a mix), "" when nothing installable is ticked.
+// True when the row is a new install or an update with a checksum — the only rows auto-ticked / select-all'd.
+bool needsAction (const Plugin&);
+// Up to date (Action::Reinstall) and not force-repaired: installSelected must skip these.
+bool shouldSkipAsUpToDate (const Plugin&);
+juce::Array<bool> defaultSelection (const juce::Array<Plugin>&);
+// Main button wording for what will actually change among the ticked rows, e.g. "Install 2 · Update 1".
+// Returns "Everything up to date" when the catalog has nothing to install or update;
+// empty when something needs doing but nothing actionable is ticked.
 juce::String primaryLabel (const juce::Array<Plugin>&, const juce::Array<bool>& checked);
 
 juce::Array<Plugin> parseReleases (const juce::String& releasesJson, Platform, juce::StringArray* skippedLog = nullptr);
