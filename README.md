@@ -25,6 +25,7 @@ Free, open-source audio plugins by Sam Arnstein (CMPLXTY), for Windows and macOS
 | RIGGED | [`rigged/`](rigged/) | Randomizable 11-effect rack |
 | FEVER | [`fever/`](fever/) | One-knob mood effect: granular pitch cloud to spectral rift |
 | STOKE | [`stoke/`](stoke/) | Clean mid-focus: boost, glow and smooth presence |
+| GLAZE | [`mastering-chain/`](mastering-chain/) | Mastering chain for bass music: EQ, glue, multiband, saturation, width, true-peak limiter with LUFS meters |
 
 ## Download
 Installers for every plugin: **https://cmplxty.music/plugins/**. Each page shows the file's SHA-256 hash.

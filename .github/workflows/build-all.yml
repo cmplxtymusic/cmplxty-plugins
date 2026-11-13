@@ -41,3 +41,5 @@ jobs:
     uses: ./.github/workflows/fever.yml
   stoke:
     uses: ./.github/workflows/stoke.yml
+  mastering-chain:
+    uses: ./.github/workflows/mastering-chain.yml

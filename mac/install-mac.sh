@@ -18,7 +18,7 @@ set -euo pipefail
 BASE="https://cmplxty.music"
 SLUGS=(glitch-crusher growl-saturator drift-shifter vocal-aligner robot-voice dark-reverb granular sidechain-shaper
        mix-tools cyber-wavetable drum-player neon-fx visualizer vvitch dr-fill plugin-hub rewired quartz silt
-       heft fallout smother rigged fever stoke)
+       heft fallout smother rigged fever stoke mastering-chain)
 # Not in "all": yoink (an app, not a plugin; install it by name).
 
 CURL=(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 2)
