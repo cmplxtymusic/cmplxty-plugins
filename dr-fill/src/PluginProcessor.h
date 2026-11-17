@@ -92,11 +92,14 @@ public:
     void stopPreview() { stopReq.store (true); }
     bool isPlaying() const noexcept { return playingNow.load(); }
     float playPosition() const noexcept { return playPos.load(); } // 0..1 of the fill, -1 when idle
+    float leadPosition() const noexcept { return leadPos.load(); } // 0..1 through the Groove lead-in, -1 when not in it
 
     // ---- export
     juce::File exportFolder() const;                               // Documents/CMPLXTY Dr Fill
     juce::String fillTitle() const;                                // "Dr Fill - Snare Roll - 1 Bar - 140 BPM - s1234"
     static int exportLengthSamples (const drf::Render&, int bars);   // bars 0 = fill + tail as rendered
+    bool leadGroove() const;                                       // 1.0.2 Lead-in: Groove (true) or Silent
+    int leadInSamples (const drf::Render&) const;                  // groove samples in front of the fill for the current Drag Length (0 = none)
     juce::File exportPart (int part, juce::String& err);           // 24-bit WAV of one part or the full fill
     juce::StringArray exportAll (juce::String& err);               // every part
 
@@ -139,13 +142,13 @@ private:
     std::atomic<double> hostBpm { 0.0 }, rate { 48000.0 }, renderedBpm { 0.0 }, renderedRate { 0.0 };
 
     // audio thread
-    struct Voice { const drf::Render* r = nullptr; int part = kPartFull; int64_t pos = 0; int startIn = 0; float fade = 1.0f, fadeStep = 0.0f; bool on = false; };
+    struct Voice { const drf::Render* r = nullptr; int part = kPartFull; int64_t pos = 0; int startIn = 0; int lead = 0; float fade = 1.0f, fadeStep = 0.0f; bool on = false; };
     std::shared_ptr<const drf::Render> playing;      // the audio thread's own reference (swapped under a try-lock)
     std::shared_ptr<const drf::Render> playingOld;
     Voice voice, tail;
     std::atomic<int> previewReq { -1 };
     std::atomic<bool> stopReq { false }, playingNow { false };
-    std::atomic<float> playPos { -1.0f };
+    std::atomic<float> playPos { -1.0f }, leadPos { -1.0f };
     juce::AudioBuffer<float> scratch;
 
     mutable juce::SpinLock msgLock;

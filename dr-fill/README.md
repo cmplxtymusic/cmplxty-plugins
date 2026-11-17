@@ -4,6 +4,15 @@ Free **drum loops in, one fill out** plug-in by CMPLXTY (VST3 + CLAP + Standalon
 Drop a kick loop, a snare loop and a hat / cymbal loop into their boxes. Dr Fill finds every hit, slices it, works out the tempo and
 writes a drum fill from your own sounds. Drag the full fill, or just the kick, snare or hats part, straight into FL Studio (or any DAW).
 
+## What's new in 1.0.2
+
+- **Lead-in: Silent / Groove** (button next to DRAG). The drag-outs are 4 or 8 bars with the fill at the end; the bars before the fill used to be silent.
+  **Groove** (the new default) plays your loops' own groove in those bars, so every drag-out (each lane, Drum Fill Loop, Drum Fill Top Loop and Full Drum Fill Loop)
+  is a ready loop that runs into the fill. **Silent** gives exactly the 1.0.1 clips. The setting is saved with the project.
+- The groove is your loops re-sequenced from their own hits at the song tempo (no time-stretch), starting on bar 1 and stopping cleanly where the fill starts:
+  the fill itself is sample-for-sample the same in both modes. It is levelled with the fill and ducks for a moment under the crash tail that wraps onto bar 1, so a clip never goes over -1 dBFS.
+- **PREVIEW** follows the switch: with Groove it plays the lead-in bars and then the fill (the fill still ends on a bar line while the host plays). MIDI notes still play only the fill, on the note.
+
 ## What's new in 1.0.1
 
 - **Five loop lanes:** Kicks, Snares, Hats, Cymbals and an optional Perc lane (shaker, tambourine or conga, played on the off-beats). Hats and cymbals are now separate lanes, and the cymbal lane provides the crash at the end of the fill.

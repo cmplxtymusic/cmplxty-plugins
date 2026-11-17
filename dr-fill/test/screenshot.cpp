@@ -131,6 +131,7 @@ int procTests()
         o = runSilence (proc, r->total + 2048, 60, 0, nullptr, 0.5f);
         float mx = 0, ref = 0; for (int k = 0; k < r->total; ++k) { mx = std::max (mx, std::fabs (o.getSample (0, k))); float l = 0; for (int lane = 0; lane < drf::kLanes; ++lane) l += r->L[(size_t) lane][(size_t) k]; ref = std::max (ref, std::fabs (l)); }
         check (std::abs (mx / ref - 0.5f) < 0.01f, "velocity sets the level");
+        { auto* li = proc.apvts.getParameter ("leadin"); li->setValueNotifyingHost (0.0f); proc.waitIdle (20000); }   // Silent: the 1.0.1 preview
         proc.preview (DrFillProcessor::kPartHats);
         o = runSilence (proc, r->total + 2048);
         check (diffToRender (o, *r, DrFillProcessor::kPartHats, 0) < 1e-6f && ! proc.isPlaying(), "PREVIEW with the host stopped plays at once, then stops");
@@ -168,6 +169,36 @@ int procTests()
         float d = 1; for (int s = expect - 2; s <= expect + 2; ++s) d = std::min (d, diffToRender (o, *r, DrFillProcessor::kPartFull, s));
         std::printf ("  bar-synced preview: expected start %d, first sound %d (fill starts with its first hit), diff %.2g\n", expect, first, d);
         check (d < 1e-6f, "PREVIEW while the host plays: the fill ends exactly on the next bar line");
+#ifdef DRF_HAS_LEADIN
+        {   // 1.0.2 Groove: the preview plays the drag-out clip (3 bars of groove + the 1-bar fill), still ending on the bar line
+            auto* li = proc.apvts.getParameter ("leadin"); li->setValueNotifyingHost (1.0f); proc.waitIdle (20000);
+            runSilence (proc, 512, -1, 0, &host); proc.waitIdle (20000);
+            const auto rg = proc.render();
+            const double p0 = host.ppq;
+            proc.preview (DrFillProcessor::kPartFull);
+            auto og = runSilence (proc, (int) (20.0 * 60.0 / 128.0 * 48000) + rg->total, -1, 0, &host);
+            const double barP = 4.0; const double Lb = (rg->lead + rg->fillLen) / 48000.0 * 128.0 / 60.0;
+            const double startP = std::ceil ((p0 + Lb) / barP - 1e-9) * barP - Lb;
+            const int at = (int) std::round ((startP - p0) * 60.0 / 128.0 * 48000.0);
+            float dg = 1;
+            for (int s0 = at - 2; s0 <= at + 2; ++s0)
+            {
+                float dd = 0;
+                for (int k = 0; k < og.getNumSamples(); ++k)
+                {
+                    const int c = k - s0; float want = 0;
+                    if (c >= 0 && c < rg->lead) for (int l = 0; l < drf::kLanes; ++l) want += rg->preL[(size_t) l].empty() ? 0.0f : rg->preL[(size_t) l][(size_t) c];
+                    else if (c >= rg->lead && c < rg->lead + rg->total) for (int l = 0; l < drf::kLanes; ++l) want += rg->L[(size_t) l][(size_t) (c - rg->lead)];
+                    dd = std::max (dd, std::fabs (og.getSample (0, k) - want));
+                }
+                dg = std::min (dg, dd);
+            }
+            std::printf ("  groove preview: lead-in %d samples (%.2f bars), clip starts at ppq %.3f, fill ends at ppq %.3f, diff to lead-in + fill %.2g\n",
+                         rg->lead, rg->lead / (4.0 * 60.0 / 128.0 * 48000.0), startP, startP + Lb, dg);
+            check (rg->lead > 0 && dg < 1e-6f && std::fabs (std::fmod (startP + Lb, 4.0)) < 1e-6, "PREVIEW with Lead-in Groove: groove bars then the fill, which ends on the bar line");
+            li->setValueNotifyingHost (0.0f); proc.waitIdle (20000);
+        }
+#endif
         auto* bpm = proc.apvts.getParameter ("bpm"); bpm->setValueNotifyingHost (bpm->convertTo0to1 (140.0f));
         check (proc.waitIdle (20000) && std::abs (proc.render()->bpm - 140.0) < 0.06 && proc.tempoSource() == "TEMPO knob", "the TEMPO knob overrides the host");
         bpm->setValueNotifyingHost (0.0f);
@@ -191,7 +222,9 @@ int procTests()
         check (d < 1e-6f, "bypassed: input passes, notes are silent");
         bp->setValueNotifyingHost (0.0f); runSilence (proc, 48000 * 3);
     }
-    // export
+    // export (Lead-in: Silent = the 1.0.1 clips; Groove is checked below)
+    { auto* li = proc.apvts.getParameter ("leadin"); check (li != nullptr && li->getDefaultValue() == 1.0f && DrFillProcessor().apvts.getParameter ("leadin")->getValue() == 1.0f, "Lead-in defaults to Groove");
+      li->setValueNotifyingHost (0.0f); proc.waitIdle (20000); }
     juce::String err;
     const auto files = proc.exportAll (err);
     check (files.size() == 6 && err.isEmpty(), "SAVE WAVS writes kick, snare, hats + the 3 combined loops (no cymbal / perc loop loaded -> skipped)");
@@ -230,6 +263,27 @@ int procTests()
                && DrFillProcessor::partHasLane (DrFillProcessor::kPartTop, drf::kPerc) && ! DrFillProcessor::partHasLane (DrFillProcessor::kPartTop, drf::kKick), "part -> lanes map");
         const auto one = proc.exportPart (DrFillProcessor::kPartSnare, err);
         check (one.getFileName().endsWith (" - Snare - 4 bars.wav"), "drag file for one part");
+        // 1.0.2 Lead-in: Groove fills the bars before the fill with the loops' groove; the fill samples stay identical to Silent
+        auto readAll = [&fm] (const juce::File& f) { std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f)); juce::AudioBuffer<float> b (2, rd ? (int) rd->lengthInSamples : 0);
+                                                     if (rd) rd->read (&b, 0, b.getNumSamples(), 0, true, true); return b; };
+        auto* li = proc.apvts.getParameter ("leadin");
+        for (int part : { (int) DrFillProcessor::kPartFull, (int) DrFillProcessor::kPartKick, (int) DrFillProcessor::kPartSnare, (int) DrFillProcessor::kPartHats,
+                          (int) DrFillProcessor::kPartDrums, (int) DrFillProcessor::kPartTop })
+        {
+            li->setValueNotifyingHost (0.0f); juce::String e1; const auto sil = readAll (proc.exportPart (part, e1));
+            li->setValueNotifyingHost (1.0f); juce::String e2; const auto grv = readAll (proc.exportPart (part, e2));   // no wait: the drag-out builds its own lead-in
+            const int N = sil.getNumSamples(), lead = N - r->fillLen, tail = r->total - r->fillLen;
+            float dFill = 0, pkG = 0; double eSil = 0, eGrv = 0;
+            for (int k = 0; k < grv.getNumSamples(); ++k) pkG = std::max ({ pkG, std::abs (grv.getSample (0, k)), std::abs (grv.getSample (1, k)) });
+            for (int k = lead; k < N; ++k) dFill = std::max (dFill, std::abs (sil.getSample (0, k) - grv.getSample (0, k)));
+            for (int k = tail; k < lead; ++k) { eSil += sil.getSample (0, k) * sil.getSample (0, k); eGrv += grv.getSample (0, k) * grv.getSample (0, k); }
+            std::printf ("  %-20s lead-in RMS silent %.1f dBFS, groove %.1f dBFS; fill region max diff %.3g\n", DrFillProcessor::partName (part),
+                         10.0 * std::log10 (eSil / std::max (1, lead - tail) + 1e-20), 10.0 * std::log10 (eGrv / std::max (1, lead - tail) + 1e-20), dFill);
+            check (pkG <= 0.8912f, (juce::String ("Groove drag-out stays under -1 dBFS (crash tail wrapped onto the groove's downbeat): ") + DrFillProcessor::partName (part)).toRawUTF8());
+            check (grv.getNumSamples() == N && dFill == 0.0f && eSil == 0.0 && eGrv > 1e-6 * (lead - tail),
+                   (juce::String ("Groove lead-in: ") + DrFillProcessor::partName (part) + " has its groove before the fill, same length, identical fill").toRawUTF8());
+        }
+        li->setValueNotifyingHost (1.0f); proc.waitIdle (20000);
     }
 
     // state: loops are embedded (FLAC) -> the same fill comes back even if the files are gone
@@ -299,6 +353,63 @@ int main (int argc, char** argv)
         std::printf ("CPU: %.3f %% of one core (60 s of audio in %.1f ms), worst block %.1f us of %.0f us\n", sec / 60.0 * 100.0, sec * 1000.0, worst * 1e6, 256.0 / 48000.0 * 1e6);
         juce::String e; const auto t1 = juce::Time::getHighResolutionTicks(); q.regenerate(); q.waitIdle (20000);
         std::printf ("REGENERATE (worker thread, incl. the 150 ms test wait): %.0f ms\n", juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t1) * 1000.0);
+        return 0;
+    }
+    if (mode == "leadin")   // 1.0.2 audio check: every drag-out in Silent / Groove (when the build has the switch) + the preview, written to `out` (a folder)
+    {
+        const juce::File dir (juce::File::getCurrentWorkingDirectory().getChildFile (out)); dir.createDirectory();
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        auto setP = [] (DrFillProcessor& q, const char* id, float v) { if (auto* pr = q.apvts.getParameter (id)) pr->setValueNotifyingHost (pr->convertTo0to1 (v)); };
+        const bool hasLead = proc.apvts.getParameter ("leadin") != nullptr;
+        struct Case { const char* tag; double loopBpm, hostBpm; int variant; };
+        for (auto c : { Case { "match140", 140.0, 140.0, 0 }, Case { "swing92at128", 92.0, 128.0, 1 } })
+        {
+            DrFillProcessor q; FakeHost host; host.bpm = c.hostBpm; host.playing = false; q.setPlayHead (&host);
+            q.setPlayConfigDetails (2, 2, 48000.0, 512); q.prepareToPlay (48000.0, 512);
+            loadDemoKit (q, c.loopBpm, c.variant); setP (q, "seed", 77.0f); runSilence (q, 512, -1, 0, &host); q.waitIdle (20000);
+            for (int dl : { 3, 4 })
+                for (int lm : { 0, 1 })
+                {
+                    if (! hasLead && lm == 1) continue;
+                    setP (q, "draglen", (float) dl); if (hasLead) setP (q, "leadin", (float) lm);
+                    q.waitIdle (20000);
+                    for (int part = 0; part < DrFillProcessor::kNumParts; ++part)
+                    {
+                        if (part == DrFillProcessor::kPartCym || part == DrFillProcessor::kPartPerc) continue;   // no loop in those lanes in the demo kit
+                        juce::String e; auto f = q.exportPart (part, e);
+                        const auto dst = dir.getChildFile (juce::String (c.tag) + "_" + juce::String (DrFillProcessor::dragBarsFromIndex (dl)) + "bar_" + (lm ? "groove" : "silent") + "_p" + juce::String (part) + ".wav");
+                        if (f.existsAsFile()) { dst.deleteFile(); f.copyFileTo (dst); } else std::printf ("  %s: %s\n", dst.getFileName().toRawUTF8(), e.toRawUTF8());
+                    }
+                    // the preview of the full loop, host stopped (starts at once), long enough for lead-in + fill + tail
+                    q.preview (DrFillProcessor::kPartFull);
+                    const auto r = q.render();
+                    const int len = (int) (r->total + 2 * DrFillProcessor::exportLengthSamples (*r, DrFillProcessor::dragBarsFromIndex (dl)) + 4800);
+                    auto pb = runSilence (q, len);
+                    const auto dst = dir.getChildFile (juce::String (c.tag) + "_" + juce::String (DrFillProcessor::dragBarsFromIndex (dl)) + "bar_" + (lm ? "groove" : "silent") + "_preview.wav");
+                    dst.deleteFile();
+                    std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (new juce::FileOutputStream (dst), 48000.0, 2, 32, {}, 0));
+                    w->writeFromAudioSampleBuffer (pb, 0, pb.getNumSamples());
+                    std::printf ("  %s %d bars %s: fillLen %d total %d bpm %.2f\n", c.tag, DrFillProcessor::dragBarsFromIndex (dl), lm ? "groove" : "silent", r->fillLen, r->total, r->bpm);
+                }
+            // host playing: the groove preview must still put the fill's end on a bar line
+            if (hasLead)
+            {
+                setP (q, "draglen", 3.0f); setP (q, "leadin", 1.0f); q.waitIdle (20000);
+                host.playing = true; host.ppq = 1.37;
+                runSilence (q, 512, -1, 0, &host);
+                const double ppq0 = host.ppq;
+                q.preview (DrFillProcessor::kPartFull);
+                const auto r = q.render();
+                auto pb = runSilence (q, (int) (12 * 4 * 60.0 / host.bpm * 48000.0), -1, 0, &host);
+                int first = -1; for (int k = 0; k < pb.getNumSamples() && first < 0; ++k) if (std::abs (pb.getSample (0, k)) > 1e-6f) first = k;
+                const double spb = 60.0 / host.bpm * 48000.0;
+                const double fillEndPpq = ppq0 + (first + DrFillProcessor::exportLengthSamples (*r, 4)) / spb;   // first sound = clip start (groove starts on its downbeat)
+                std::printf ("  %s host-playing groove preview: clip starts at ppq %.4f, fill ends at ppq %.4f (bar = 4 ppq, off by %.5f ppq)\n", c.tag,
+                             ppq0 + first / spb, fillEndPpq, std::fabs (fillEndPpq / 4.0 - std::round (fillEndPpq / 4.0)) * 4.0);
+                host.playing = false;
+            }
+        }
+        std::printf ("LEADIN RENDER DONE (lead-in switch %s)\n", hasLead ? "present" : "absent: 1.0.1 build");
         return 0;
     }
     if (mode == "params")

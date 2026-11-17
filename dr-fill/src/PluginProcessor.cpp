@@ -25,6 +25,8 @@ const drf::PDef kParams[] = {
     { "bpm",      "Tempo",        'f', 0.0f, 250.0f, 0.1f, 1.0f, 0.0f, "BPM" },
     { "sens",     "Hit Sensitivity", 'f', 0.0f, 1.0f, 0.01f, 1.0f, 0.5f, "%" },
     { "bypass",   "Bypass",       'b', 0, 1, 1, 1, 0.0f, "" },
+    // 1.0.2 (appended so the older parameters keep their order): what plays in the bars before the fill in a drag-out / the preview
+    { "leadin",   "Lead-in",      'c', 0, 1, 1, 1, 1.0f, "", "Silent|Groove" },
 };
 const int kLengthBeats[] = { 1, 2, 4, 8 };
 const char* kLengthName[] = { "1 Beat", "2 Beats", "1 Bar", "2 Bars" };
@@ -79,6 +81,7 @@ DrFillProcessor::DrFillProcessor()
     presets.keepIds.addIfNotAlreadyThere ("bpm");      // nor change the tempo or how the loops are sliced
     presets.keepIds.addIfNotAlreadyThere ("sens");
     presets.keepIds.addIfNotAlreadyThere ("draglen");   // a workflow setting, not part of a sound
+    presets.keepIds.addIfNotAlreadyThere ("leadin");    // same
     for (auto& d : kParams) if (juce::String (d.id) != "bypass") apvts.addParameterListener (d.id, this);
     kitPub = std::make_shared<drf::Kit>();
     renderPub = std::make_shared<drf::Render>();
@@ -163,13 +166,15 @@ void DrFillProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffe
         if (hostPlaying)
         {
             // line the fill up so it ENDS on a bar line (the next one it fits before)
-            const double Lb = playing ? (double) playing->fillLen / juce::jmax (1.0, playing->rate) * playing->bpm / 60.0 : 4.0;
+            // 1.0.2: with a Groove lead-in the preview plays the drag-out clip (groove bars + fill), the fill still ends on the bar line
+            const double Lb = playing ? (double) (playing->fillLen + playing->lead) / juce::jmax (1.0, playing->rate) * playing->bpm / 60.0 : 4.0;
             const double k = std::ceil ((ppq + Lb - lastBar) / barLen - 1e-9);
             const double start = lastBar + k * barLen - Lb;
             const double delaySec = (start - ppq) * 60.0 / bpm;
             at = (int) juce::jlimit (0.0, 30.0 * getSampleRate(), std::round (delaySec * getSampleRate()));
         }
         trigger (pr, at, 1.0f);
+        voice.lead = voice.r != nullptr ? voice.r->lead : 0;   // preview only: MIDI notes play the fill on the note, as before
     }
     for (const auto m : midi)
     {
@@ -189,10 +194,19 @@ void DrFillProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffe
         if (v.startIn > 0) { const int skip = juce::jmin (n, v.startIn); v.startIn -= skip; i0 = skip; if (i0 >= n) return; }
         for (int i = i0; i < n; ++i)
         {
-            if (v.pos >= r.total) { v.on = false; break; }
+            if (v.pos >= r.total + v.lead) { v.on = false; break; }
             float l = 0, rr = 0;
-            const size_t k = (size_t) v.pos;
-            for (int lane = 0; lane < drf::kLanes; ++lane) if (partHasLane (v.part, lane)) { l += r.L[(size_t) lane][k]; rr += r.R[(size_t) lane][k]; }
+            if (v.pos < v.lead)
+            {
+                const size_t k = (size_t) v.pos;
+                for (int lane = 0; lane < drf::kLanes; ++lane)
+                    if (partHasLane (v.part, lane) && k < r.preL[(size_t) lane].size()) { l += r.preL[(size_t) lane][k]; rr += r.preR[(size_t) lane][k]; }
+            }
+            else
+            {
+                const size_t k = (size_t) (v.pos - v.lead);
+                for (int lane = 0; lane < drf::kLanes; ++lane) if (partHasLane (v.part, lane)) { l += r.L[(size_t) lane][k]; rr += r.R[(size_t) lane][k]; }
+            }
             float g = v.fade;
             if (fadingOut) { v.fade -= v.fadeStep; if (v.fade <= 0.0f) { v.on = false; break; } }
             if (nOut >= 2) { b.addSample (0, i, g * l); b.addSample (1, i, g * rr); }
@@ -204,7 +218,9 @@ void DrFillProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffe
     play (voice, false);
     if (! tail.on) playingOld.reset();   // still in keepAlive: no free here
     playingNow.store (voice.on);
-    playPos.store (voice.on && voice.r && voice.r->fillLen > 0 && voice.startIn == 0 ? juce::jmin (1.0f, (float) voice.pos / (float) voice.r->fillLen) : -1.0f);
+    playPos.store (voice.on && voice.r && voice.r->fillLen > 0 && voice.startIn == 0 && voice.pos >= voice.lead
+                   ? juce::jmin (1.0f, (float) (voice.pos - voice.lead) / (float) voice.r->fillLen) : -1.0f);
+    leadPos.store (voice.on && voice.r && voice.lead > 0 && voice.startIn == 0 && voice.pos < voice.lead ? (float) voice.pos / (float) voice.lead : -1.0f);
     midi.clear();
     bypass.mix (b, bypassParam != nullptr && bypassParam->get());
 }
@@ -361,6 +377,14 @@ void DrFillProcessor::workerLoop()
         const double bpm = tempoFor (detectedTempo()), sr = rate.load();
         const auto f = drf::generate (*analysed, s);
         auto r = std::make_shared<drf::Render> (drf::render (*analysed, f, bpm, sr, s));
+        {   // 1.0.2: the Groove lead-in for the preview (the drag-outs build the same one)
+            const int lead = leadInSamples (*r);
+            if (lead > 0)
+            {
+                auto li = drf::renderLeadIn (*analysed, detectedTempo().bpm, r->bpm, r->rate, lead, r->level, r->gain, r.get());
+                r->lead = lead; r->preL = std::move (li.L); r->preR = std::move (li.R);
+            }
+        }
         {
             const juce::SpinLock::ScopedLockType l (pubLock);
             renderPub = r; fillPub = f; keepAlive.push_back (r);
@@ -406,6 +430,15 @@ juce::String DrFillProcessor::fillTitle() const
            + juce::String (juce::roundToInt (apvts.getRawParameterValue ("seed")->load()));
 }
 
+bool DrFillProcessor::leadGroove() const { return juce::roundToInt (apvts.getRawParameterValue ("leadin")->load()) == 1; }
+
+int DrFillProcessor::leadInSamples (const drf::Render& r) const
+{
+    const int bars = dragBarsFromIndex (juce::roundToInt (apvts.getRawParameterValue ("draglen")->load()));
+    if (! leadGroove() || bars <= 0 || r.fillLen <= 0) return 0;
+    return juce::jmax (0, exportLengthSamples (r, bars) - r.fillLen);
+}
+
 int DrFillProcessor::exportLengthSamples (const drf::Render& r, int bars)
 {
     if (bars <= 0) return r.total;
@@ -427,6 +460,21 @@ juce::File DrFillProcessor::exportPart (int part, juce::String& err)
     const int N = exportLengthSamples (*r, bars);
     const int offset = bars > 0 ? N - r->fillLen : 0;
     juce::AudioBuffer<float> b (2, N); b.clear();
+    // 1.0.2 Lead-in: Groove = the loops' own groove in the bars before the fill (same buffers as the preview), Silent = 1.0.1 (silence)
+    const int lead = bars > 0 ? leadInSamples (*r) : 0;
+    if (lead > 0)
+    {
+        drf::LeadIn made;
+        const bool cached = r->lead == lead;
+        if (! cached) { const auto k = kit(); made = drf::renderLeadIn (*k, detectedTempo().bpm, r->bpm, r->rate, lead, r->level, r->gain, r.get()); }
+        const auto& PL = cached ? r->preL : made.L; const auto& PR = cached ? r->preR : made.R;
+        for (int lane = 0; lane < drf::kLanes; ++lane)
+            if (partHasLane (part, lane) && PL[(size_t) lane].size() >= (size_t) lead)
+            {
+                b.addFrom (0, 0, PL[(size_t) lane].data(), lead); b.addFrom (1, 0, PR[(size_t) lane].data(), lead);
+                for (int k = 0; k < lead && ! any; ++k) any = PL[(size_t) lane][(size_t) k] != 0.0f;
+            }
+    }
     for (int k = 0; k < r->total; ++k)
     {
         float l = 0, rr = 0;

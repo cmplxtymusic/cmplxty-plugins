@@ -32,7 +32,7 @@ public:
 
     DrFillDisplay (DrFillProcessor& p) : proc (p)
     {
-        for (auto* b : { &load, &clearAll, &previewBtn, &regen, &seedDown, &seedUp, &save, &dragLen })
+        for (auto* b : { &load, &clearAll, &previewBtn, &regen, &seedDown, &seedUp, &save, &dragLen, &leadIn })
         {
             addAndMakeVisible (*b);
             b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false);
@@ -66,6 +66,15 @@ public:
                 safe->refreshDragLen();
             });
         };
+        // 1.0.2: what plays in the bars before the fill (drag-outs and PREVIEW alike)
+        leadIn.setTooltip ("Lead-in: what plays in the bars before the fill in dragged / saved clips and in PREVIEW. "
+                           "GROOVE = your loops' own groove, so the clip is a loop that ends in the fill. SILENT = silence until the fill.");
+        leadIn.onClick = [this]
+        {
+            auto* prm = proc.apvts.getParameter ("leadin");
+            prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 (proc.leadGroove() ? 0.0f : 1.0f)); prm->endChangeGesture();
+            refreshDragLen();
+        };
         startTimerHz (25);
         refresh();
     }
@@ -74,13 +83,14 @@ public:
     {
         auto r = getLocalBounds().reduced (10, 8).removeFromTop (26);
         load.setBounds (r.removeFromLeft (92)); r.removeFromLeft (6);
-        clearAll.setBounds (r.removeFromLeft (64)); r.removeFromLeft (18);
-        previewBtn.setBounds (r.removeFromLeft (92)); r.removeFromLeft (6);
-        regen.setBounds (r.removeFromLeft (108)); r.removeFromLeft (6);
-        seedDown.setBounds (r.removeFromLeft (26)); seedArea = r.removeFromLeft (78); seedUp.setBounds (r.removeFromLeft (26)); r.removeFromLeft (18);
-        save.setBounds (r.removeFromLeft (98)); r.removeFromLeft (6);
-        dragLen.setBounds (r.removeFromLeft (118));
-        tempoArea = r.withTrimmedLeft (10);
+        clearAll.setBounds (r.removeFromLeft (64)); r.removeFromLeft (12);
+        previewBtn.setBounds (r.removeFromLeft (84)); r.removeFromLeft (6);
+        regen.setBounds (r.removeFromLeft (100)); r.removeFromLeft (6);
+        seedDown.setBounds (r.removeFromLeft (24)); seedArea = r.removeFromLeft (70); seedUp.setBounds (r.removeFromLeft (24)); r.removeFromLeft (12);
+        save.setBounds (r.removeFromLeft (90)); r.removeFromLeft (6);
+        dragLen.setBounds (r.removeFromLeft (112)); r.removeFromLeft (4);
+        leadIn.setBounds (r.removeFromLeft (132));
+        tempoArea = r.withTrimmedLeft (8);
 
         auto body = getLocalBounds().reduced (10, 0).withTrimmedTop (42);
         for (int l = 0; l < drf::kLanes; ++l)
@@ -117,7 +127,7 @@ public:
         const auto t = proc.detectedTempo();
         juce::String tempo = juce::String (proc.fillTempo(), 1) + " BPM (" + proc.tempoSource() + ")";
         if (t.bpm > 0 && proc.tempoSource() != "loops" && proc.tempoSource() != "file name") tempo << "  -  loops: " << juce::String (t.bpm, 1);
-        g.drawFittedText (tempo, tempoArea, juce::Justification::centredRight, 1, 0.85f);
+        g.drawFittedText (tempo, tempoArea, juce::Justification::centredRight, 2, 0.8f);
 
         // three drop boxes + loop overviews with the hits found
         for (int l = 0; l < drf::kLanes; ++l)
@@ -222,6 +232,14 @@ public:
             g.drawText (kRowTag[l], grid.getRight() - 40, grid.getY() + (int) (kRowOf[l] * rh), 38, (int) rh, juce::Justification::centredRight);
         const float pp = proc.playPosition();
         if (pp >= 0.0f) { g.setColour (cPri); g.fillRect (grid.getX() + pp * grid.getWidth(), (float) grid.getY(), 1.5f, (float) grid.getHeight()); }
+        const float lp = proc.leadPosition();
+        if (lp >= 0.0f)
+        {   // 1.0.2: the preview is in the Groove lead-in; a bar along the top shows how far until the fill
+            g.setColour (cPri.withAlpha (0.25f)); g.fillRect ((float) grid.getX(), (float) grid.getY(), (float) grid.getWidth(), 2.0f);
+            g.setColour (cPri); g.fillRect ((float) grid.getX(), (float) grid.getY(), lp * grid.getWidth(), 2.0f);
+            g.setFont (uiFont (9.5f, true));
+            g.drawText ("LEAD-IN (GROOVE)", grid.getX() + 4, grid.getY() + 3, 140, 12, juce::Justification::centredLeft);
+        }
 
         // drag chips (click = preview that part)
         for (int p = 0; p < DrFillProcessor::kNumParts; ++p)
@@ -350,6 +368,11 @@ private:
         static const char* t[] = { "DRAG: FILL ONLY", "DRAG: 1 BAR", "DRAG: 2 BARS", "DRAG: 4 BARS", "DRAG: 8 BARS" };
         const auto txt = juce::String (t[juce::jlimit (0, 4, juce::roundToInt (proc.apvts.getRawParameterValue ("draglen")->load()))]);
         if (dragLen.getButtonText() != txt) dragLen.setButtonText (txt);
+        const auto lt = juce::String (proc.leadGroove() ? "LEAD-IN: GROOVE" : "LEAD-IN: SILENT");
+        if (leadIn.getButtonText() != lt) leadIn.setButtonText (lt);
+        const bool hasLead = juce::roundToInt (proc.apvts.getRawParameterValue ("draglen")->load()) > 0;   // Fill Only has no bars before the fill
+        leadIn.setToggleState (proc.leadGroove(), juce::dontSendNotification);
+        if (leadIn.isEnabled() != hasLead) leadIn.setEnabled (hasLead);
     }
     void timerCallback() override
     {
@@ -363,7 +386,7 @@ private:
     }
 
     DrFillProcessor& proc;
-    juce::TextButton load { "LOAD..." }, clearAll { "CLEAR" }, previewBtn { "PREVIEW" }, regen { "REGENERATE" }, seedDown { "<" }, seedUp { ">" }, save { "SAVE WAVS" }, dragLen { "DRAG: 4 BARS" };
+    juce::TextButton load { "LOAD..." }, clearAll { "CLEAR" }, previewBtn { "PREVIEW" }, regen { "REGENERATE" }, seedDown { "<" }, seedUp { ">" }, save { "SAVE WAVS" }, dragLen { "DRAG: 4 BARS" }, leadIn { "LEAD-IN: GROOVE" };
     std::array<juce::TextButton, drf::kLanes> clearLane { juce::TextButton ("x"), juce::TextButton ("x"), juce::TextButton ("x"), juce::TextButton ("x"), juce::TextButton ("x") };
     juce::Rectangle<int> rows[drf::kLanes], boxes[drf::kLanes], waves[drf::kLanes], fillView, chips[DrFillProcessor::kNumParts], status, seedArea, tempoArea;
     std::unique_ptr<juce::FileChooser> chooser;

@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#define DRF_HAS_LEADIN 1   // 1.0.2: Render::lead / renderLeadIn (the tests check for it)
+
 namespace drf
 {
 // 1.1.0: hats and cymbals are separate lanes (Sam), plus an optional percussion lane
@@ -660,16 +662,20 @@ struct Render
     int total = 0;            // fillLen + ringing tail
     float gain = 1.0f;        // safety gain that kept the full fill under -1 dBFS (1 = none)
     float peak = 0;           // full-fill peak after that
+    float level = 1.0f;       // the Level the fill was rendered with (the lead-in uses the same)
     float maxEdge = 0;        // largest |sample| at any slice's first / last rendered sample (click check; ~0)
     int events = 0;
     std::vector<double> eventTimes;   // seconds, per rendered event (same order as the fill's events)
+    // 1.0.2 lead-in (Groove): the bars before the fill, per part, for the preview (the drag-outs build the same buffers with renderLeadIn)
+    int lead = 0;                                   // samples of lead-in in front of the fill (0 = none / Silent / Fill Only)
+    std::array<std::vector<float>, kLanes> preL, preR;
 };
 
 inline double eventSeconds (const Event& e, double bpm) { return e.beat * 60.0 / bpm + e.offsetMs * 0.001; }
 
 inline Render render (const Kit& kit, const Fill& fill, double bpm, double rate, const FillSettings& s)
 {
-    Render out; out.rate = rate; out.bpm = bpm = std::clamp (bpm, 20.0, 400.0);
+    Render out; out.rate = rate; out.bpm = bpm = std::clamp (bpm, 20.0, 400.0); out.level = s.level;
     out.fillLen = (int) std::llround (fill.lengthBeats * 60.0 / bpm * rate);
     const int maxTotal = out.fillLen + (int) (4.0 * rate);
     struct Play { int lane, hit; double outStart; double rho; int len; float gain; const Event* e; };
@@ -761,6 +767,117 @@ inline Render render (const Kit& kit, const Fill& fill, double bpm, double rate,
         pk = ceiling; out.maxEdge *= out.gain;
     }
     out.peak = pk;
+    return out;
+}
+
+// ------------------------------------------------------------------------------------------------ 5. lead-in groove (1.0.2)
+// The bars in front of the fill in a drag-out / preview: each loaded loop plays its own groove again, re-sequenced from its sliced hits
+// onto the fill tempo (hit positions in beats from the loop's tempo; the slices are not time-stretched), starting on the clip's
+// first downbeat and repeating every loop length. Everything stops at `lead` (the fill start) with a short fade, so the fill
+// region itself is untouched: a Groove drag-out and a Silent one hold the very same fill samples.
+// Level: the loops at their own dynamics x Level x the fill's safety gain, turned down further if the groove alone would go over -1 dBFS.
+struct LeadIn { std::array<std::vector<float>, kLanes> L, R; float gain = 1.0f; int hits = 0; };
+
+inline double loopBeats (const Loop& lp, double loopBpm)
+{
+    const double b = lp.lengthSec * loopBpm / 60.0;
+    double nb = std::max (1.0, std::round (b));
+    const double bar = std::max (4.0, std::round (b / 4.0) * 4.0);
+    if (std::fabs (b - bar) < 0.3) nb = bar;     // close to whole bars: whole bars
+    return nb;
+}
+
+inline LeadIn renderLeadIn (const Kit& kit, double loopBpm, double bpm, double rate, int lead, float level, float fillGain, const Render* wrapTail = nullptr)
+{
+    LeadIn out;
+    if (lead <= 0) return out;
+    bpm = std::clamp (bpm, 20.0, 400.0);
+    if (! (loopBpm > 20.0 && loopBpm < 400.0)) loopBpm = bpm;
+    const int fadeIn = std::max (8, (int) std::lround (0.0015 * rate)), fadeOutChoke = std::max (16, (int) std::lround (0.004 * rate)),
+              fadeOutEnd = std::max (16, (int) std::lround (0.008 * rate));
+    for (int lane = 0; lane < kLanes; ++lane)
+    {
+        const auto& lp = kit[(size_t) lane];
+        if (lp.empty()) continue;
+        out.L[(size_t) lane].assign ((size_t) lead, 0.0f); out.R[(size_t) lane].assign ((size_t) lead, 0.0f);
+        const double beatsLoop = loopBeats (lp, loopBpm);
+        const double period = beatsLoop * 60.0 / bpm * rate, rho = lp.audio.rate / rate;
+        struct P { const Hit* h; double outStart, tOut; };
+        std::vector<P> seq;
+        for (int rep = 0; rep * period < lead; ++rep)
+            for (auto& h : lp.hits)
+            {
+                const double beat = h.onset / lp.audio.rate * loopBpm / 60.0;
+                if (beat >= beatsLoop - 1e-3) continue;           // past the loop's last whole beat
+                const double tOut = rep * period + beat * 60.0 / bpm * rate;
+                if (tOut >= lead - fadeOutChoke) continue;          // would only be a fade: leave the fill start clean
+                seq.push_back ({ &h, tOut - (h.onset - h.start) / rho, tOut });
+            }
+        std::sort (seq.begin(), seq.end(), [] (const P& a, const P& b) { return a.tOut < b.tOut; });
+        float* oL = out.L[(size_t) lane].data(); float* oR = out.R[(size_t) lane].data();
+        const bool st = lp.audio.stereo();
+        for (size_t i = 0; i < seq.size(); ++i)
+        {
+            const auto& h = *seq[i].h;
+            const int natural = (int) std::floor (seq[i].outStart + (h.end - h.start) / rho);
+            int z = natural;
+            if (i + 1 < seq.size()) z = std::min (z, (int) std::floor (seq[i + 1].tOut));   // choked by the next hit, as in the loop
+            z = std::min (z, lead);
+            const int s0 = (int) std::ceil (seq[i].outStart), a = std::max (0, s0);
+            if (z <= a) continue;
+            const bool choked = z < natural;
+            const int fo = std::min (choked ? fadeOutChoke : fadeOutEnd, std::max (4, (z - a) / 3));
+            const int fi = s0 < 0 ? std::max (4, fadeIn / 3) : fadeIn;
+            for (int k = a; k < z; ++k)
+            {
+                const double src = h.start + (k - seq[i].outStart) * rho;
+                if (src >= h.end) break;
+                const float env = detail::raisedCos ((float) (k - a) / (float) fi) * detail::raisedCos ((float) (z - 1 - k) / (float) fo);
+                const float xl = detail::hermite (lp.audio.L, src), xr = st ? detail::hermite (lp.audio.R, src) : xl;
+                oL[k] += env * xl; oR[k] += env * xr;
+            }
+            ++out.hits;
+        }
+    }
+    // level: the loops' own dynamics x Level x the fill's safety gain, turned down (only the groove, never the fill) so the clip stays
+    // under -1 dBFS - including bar 1, where the fill's ringing tail (crash) is wrapped onto the groove's first downbeat in a drag-out
+    std::vector<float> sL ((size_t) lead, 0.0f), sR ((size_t) lead, 0.0f), tL, tR;
+    for (int l = 0; l < kLanes; ++l)
+        if (! out.L[(size_t) l].empty())
+            for (int k = 0; k < lead; ++k) { sL[(size_t) k] += out.L[(size_t) l][(size_t) k]; sR[(size_t) k] += out.R[(size_t) l][(size_t) k]; }
+    if (wrapTail != nullptr && wrapTail->total > wrapTail->fillLen)
+    {
+        const int T = std::min (lead, wrapTail->total - wrapTail->fillLen);
+        tL.assign ((size_t) T, 0.0f); tR.assign ((size_t) T, 0.0f);
+        for (int l = 0; l < kLanes; ++l)
+            for (int k = 0; k < T; ++k) { tL[(size_t) k] += wrapTail->L[(size_t) l][(size_t) (wrapTail->fillLen + k)]; tR[(size_t) k] += wrapTail->R[(size_t) l][(size_t) (wrapTail->fillLen + k)]; }
+    }
+    // per-sample groove gain h[k] <= g with |h S + T| <= ceiling (S = groove mix, T = wrapped tail), then smoothed with a 3 ms ramp down
+    // ahead of each peak and a 60 ms recovery - both passes only ever lower h, so the ceiling holds. The groove ducks under a loud crash
+    // tail for a moment instead of the whole lead-in being turned down.
+    const float ceiling = 0.891f;   // -1 dBFS, as the fill
+    const float g = level * fillGain;
+    std::vector<float> h ((size_t) lead, g);
+    auto bound = [ceiling] (float sv, float tv, float hmax)
+    {
+        if (std::fabs (hmax * sv + tv) <= ceiling) return hmax;
+        if (std::fabs (sv) < 1e-12f) return hmax;            // the tail alone (never over: the fill render is under the ceiling)
+        const float hi = sv > 0 ? (ceiling - tv) / sv : (-ceiling - tv) / sv;
+        return std::clamp (hi, 0.0f, hmax);
+    };
+    for (int k = 0; k < lead; ++k)
+    {
+        const float tl = k < (int) tL.size() ? tL[(size_t) k] : 0.0f, tr = k < (int) tR.size() ? tR[(size_t) k] : 0.0f;
+        h[(size_t) k] = std::min (bound (sL[(size_t) k], tl, g), bound (sR[(size_t) k], tr, g));
+    }
+    const float down = g / std::max (1.0f, (float) (0.003 * rate)), up = g / std::max (1.0f, (float) (0.060 * rate));
+    for (int k = lead - 2; k >= 0; --k) h[(size_t) k] = std::min (h[(size_t) k], h[(size_t) k + 1] + down);
+    for (int k = 1; k < lead; ++k)      h[(size_t) k] = std::min (h[(size_t) k], h[(size_t) k - 1] + up);
+    float mn = g; for (auto v : h) mn = std::min (mn, v);
+    out.gain = mn;   // the lowest groove gain used (= g when nothing had to duck)
+    for (int l = 0; l < kLanes; ++l)
+        if (! out.L[(size_t) l].empty())
+            for (int k = 0; k < lead; ++k) { out.L[(size_t) l][(size_t) k] *= h[(size_t) k]; out.R[(size_t) l][(size_t) k] *= h[(size_t) k]; }
     return out;
 }
 } // namespace drf
