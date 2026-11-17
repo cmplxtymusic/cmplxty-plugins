@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "VvitchDSP.h"
 #include "PresetManager.h"
+#define VV_HAS_MACRO_MAP 1   // 1.2.0 (the tests check for it)
 
 // CMPLXTY VVITCH: dark polysynth for witch house: detuned saw / square / PWM oscillators with unison, noise, a choral vox formant
 // stage, a driven filter, pitch drop and DRAG, arp and glide, CHIP crush, TAPE wow, dark delay and reverb. MIDI in, stereo out.
@@ -49,6 +50,22 @@ public:
     static const char* defaultMacroName (int m);
     juce::String macroName (int m) const;
     void setMacroName (int m, const juce::String& name);
+    // 1.2.0 macro assignment: every macro drives up to kMaxTargets parameters, each by -100..+100 % of that knob's travel at full macro.
+    // The stock targets of 1.1.x are the default map (factory presets, Init, and every older session / user preset without a map),
+    // so old sounds and old macro moves stay exactly as they were. The map lives in the session state and in user presets.
+    // Message thread: edit with the functions below. Audio thread: reads the published copy (atomics, no locks, no allocation).
+    static constexpr int kMaxTargets = 8;
+    struct MacroTarget { juce::String id; float amount = 0.0f; };
+    std::vector<MacroTarget> macroTargets (int m) const;              // in order
+    bool isAssignable (const juce::String& paramId) const;            // continuous knobs except the macros themselves
+    float macroAmount (int m, const juce::String& paramId) const;     // 0 when not assigned
+    bool assignMacro (int m, const juce::String& paramId, float amount);   // add or change; false when the macro is full / not assignable
+    void removeMacroTarget (int m, const juce::String& paramId);
+    void clearMacro (int m);
+    void restoreDefaultMacro (int m);
+    bool macroIsDefault (int m) const;
+    juce::String macroMapString() const;                              // "id:amount,id:amount|...|..." (8 groups)
+    void setMacroMapString (const juce::String&);                     // empty = the 1.1.x stock map
     // on-screen keyboard / tests: queued notes, played on the audio thread at the next block
     void queueNote (int note, float vel) { uiMidi.push (note, vel); }
 
@@ -62,7 +79,13 @@ private:
     std::vector<std::atomic<float>*> raw;
     std::vector<float> scratchR;
     std::vector<juce::NormalisableRange<float>> ranges;
-    float mval (int i) const;   // value with the macro offsets applied
+    float mval (int i, const float* off) const;   // value with the macro offsets applied
+    // published macro map for the audio thread: param index (-1 = empty slot) + amount, per macro and slot
+    std::array<std::atomic<int>, kMacros * kMaxTargets> mapParam;
+    std::array<std::atomic<float>, kMacros * kMaxTargets> mapAmount;
+    std::array<std::vector<MacroTarget>, kMacros> mapEdit;          // message-thread copy
+    void publishMap();
+    int paramIndex (const juce::String& id) const;
     float val (int i) const { return raw[(size_t) i]->load (std::memory_order_relaxed); }
     void handleMidi (const juce::MidiMessage&);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VvitchProcessor)

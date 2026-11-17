@@ -365,6 +365,7 @@ Panel::KnobBox& Panel::addKnob (const char* id, const char* name)
     k.slider.updateText();
     paramOf.push_back ({ &k.slider, id });
     k.slider.onContextMenu = [this, id = juce::String (id)] (vvui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (id, &kn, getLocalPoint (nullptr, screenPos)); };
+    k.slider.onClickIntercept = [this, id = juce::String (id)] (vvui::Knob&) { return learnMacro >= 0 && learnClick (id); };
     return k;
 }
 
@@ -517,6 +518,8 @@ void Panel::timerCallback()
     const bool showBar = ! banner.isVisible();
     for (auto* b : { &presetPrev, &presetBtn, &presetNext }) if (b->isVisible() != showBar) b->setVisible (showBar);
     refreshRackLabels();
+    const auto map = proc.macroMapString();
+    if (map != lastMap) { lastMap = map; repaint(); }
 }
 
 // FX slot knob labels follow the slot type; macro labels show the (user-editable) macro names.
@@ -714,6 +717,7 @@ juce::String Panel::paramIdOf (juce::Component* c) const
 // that touches the parameter so the host registers it as the last-touched / automatable one.
 void Panel::showParamMenu (const juce::String& id, vvui::Knob* knobPtr, juce::Point<int> pos)
 {
+    if (learnMacro >= 0) { endAssign(); return; }   // a right-click ends "click a knob to assign"
     auto* prm = id.isNotEmpty() ? proc.apvts.getParameter (id) : nullptr;
     juce::Component::SafePointer<vvui::Knob> knob (knobPtr);
     std::vector<vvui::PopupOverlay::Item> v;
@@ -728,6 +732,23 @@ void Panel::showParamMenu (const juce::String& id, vvui::Knob* knobPtr, juce::Po
             const auto clip = juce::SystemClipboard::getTextFromClipboard().trim();
             const bool pasteOk = clip.isNotEmpty() && clip.length() < 24 && clip.containsAnyOf ("0123456789");
             v.push_back ({ "&Paste value", [knob, clip, prm] { if (knob != nullptr) { prm->beginChangeGesture(); knob->setValue (knob->getValueFromText (clip), juce::sendNotificationSync); prm->endChangeGesture(); } }, pasteOk });
+            // 1.2.0 macro assignment
+            const int mi = id.startsWith ("macro") ? id.getTrailingIntValue() - 1 : -1;
+            if (mi >= 0 && mi < VvitchProcessor::kMacros)
+            {
+                const auto targets = proc.macroTargets (mi);
+                v.push_back ({ "Assi&gn: click knobs...\tadd targets", [this, mi] { startAssign (mi); }, (int) targets.size() < VvitchProcessor::kMaxTargets, false, true });
+                for (auto& t : targets)
+                    v.push_back ({ "    " + targetName (t.id) + "\t" + (t.amount > 0 ? "+" : "") + juce::String (juce::roundToInt (t.amount * 100.0f)) + " %",
+                                   [this, mi, tid = t.id, pos] { showAmountMenu (mi, tid, pos); } });
+                v.push_back ({ "C&lear all targets", [this, mi] { proc.clearMacro (mi); footerNote = macroLabel (mi) + ": no targets"; repaint(); }, ! targets.empty() });
+                v.push_back ({ "Restore &stock targets", [this, mi] { proc.restoreDefaultMacro (mi); footerNote = macroLabel (mi) + ": stock targets"; repaint(); }, ! proc.macroIsDefault (mi) });
+            }
+            else if (proc.isAssignable (id))
+            {
+                juce::StringArray on; for (int m = 0; m < VvitchProcessor::kMacros; ++m) if (proc.macroAmount (m, id) != 0.0f || [&] { for (auto& t : proc.macroTargets (m)) if (t.id == id) return true; return false; }()) on.add ("M" + juce::String (m + 1));
+                v.push_back ({ "Assign to &macro...\t" + on.joinIntoString (" "), [this, id, pos] { showAssignMenu (id, pos); }, true, false, true });
+            }
         }
         std::shared_ptr<juce::HostProvidedContextMenu> host;
         if (auto* hc = owner.getHostContext())
@@ -761,6 +782,116 @@ void Panel::showParamMenu (const juce::String& id, vvui::Knob* knobPtr, juce::Po
     }
     v.push_back ({ "&Init all controls", [this] { resetAll(); }, true, false, true });
     popup.show (pos, std::move (v));
+}
+
+juce::String Panel::macroLabel (int m) const { return "M" + juce::String (m + 1) + " " + proc.macroName (m); }
+juce::String Panel::targetName (const juce::String& id) const
+{
+    if (auto* p = proc.apvts.getParameter (id)) return p->getName (40);
+    return id;
+}
+
+// right-click a knob > Assign to macro...: the eight macros (ticked = already drives this knob, with its amount)
+void Panel::showAssignMenu (const juce::String& id, juce::Point<int> pos)
+{
+    std::vector<vvui::PopupOverlay::Item> v;
+    v.push_back ({ targetName (id) + ": assign to", {}, false });
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+    {
+        bool has = false; float amt = 0;
+        for (auto& t : proc.macroTargets (m)) if (t.id == id) { has = true; amt = t.amount; }
+        const bool full = ! has && (int) proc.macroTargets (m).size() >= VvitchProcessor::kMaxTargets;
+        const juce::String hint = has ? (amt > 0 ? "+" : "") + juce::String (juce::roundToInt (amt * 100.0f)) + " %" : full ? juce::String ("full") : juce::String();
+        v.push_back ({ "Macro &" + juce::String (m + 1) + "  " + proc.macroName (m) + "\t" + hint, [this, m, id, pos, has]
+                       {
+                           if (! has) { proc.assignMacro (m, id, 0.5f); footerNote = targetName (id) + " -> " + macroLabel (m) + " at +50 % (right-click to change the amount)"; repaint(); }
+                           showAmountMenu (m, id, pos);
+                       }, ! full, has, m == 0 });
+    }
+    popup.show (pos, std::move (v));
+}
+
+// amount for one target: -100 .. +100 % of the knob's travel at full macro, or remove it
+void Panel::showAmountMenu (int m, const juce::String& id, juce::Point<int> pos)
+{
+    std::vector<vvui::PopupOverlay::Item> v;
+    const float cur = proc.macroAmount (m, id);
+    v.push_back ({ macroLabel (m) + " > " + targetName (id) + ": amount", {}, false });
+    for (int a = 100; a >= -100; a -= 10)
+    {
+        if (a == 0) continue;
+        v.push_back ({ (a > 0 ? "+" : "") + juce::String (a) + " %", [this, m, id, a]
+                       { proc.assignMacro (m, id, (float) a / 100.0f); footerNote = targetName (id) + " -> " + macroLabel (m) + " at " + (a > 0 ? "+" : "") + juce::String (a) + " %"; repaint(); },
+                       true, juce::roundToInt (cur * 100.0f) == a, a == -10 });
+    }
+    v.push_back ({ "&Remove from " + macroLabel (m), [this, m, id] { proc.removeMacroTarget (m, id); footerNote = targetName (id) + " removed from " + macroLabel (m); repaint(); }, true, false, true });
+    popup.show (pos, std::move (v));
+}
+
+void Panel::startAssign (int m)
+{
+    learnMacro = m;
+    footerNote = "Assigning " + macroLabel (m) + ": click knobs to add them (+50 %), click the macro or right-click to finish";
+    repaint();
+}
+void Panel::endAssign()
+{
+    if (learnMacro >= 0) footerNote = macroLabel (learnMacro) + ": " + juce::String ((int) proc.macroTargets (learnMacro).size()) + " target(s)";
+    learnMacro = -1; repaint();
+}
+bool Panel::learnClick (const juce::String& id)
+{
+    if (learnMacro < 0) return false;
+    if (id.startsWith ("macro")) { endAssign(); return true; }
+    if (! proc.isAssignable (id)) return true;
+    bool has = false; for (auto& t : proc.macroTargets (learnMacro)) has |= t.id == id;
+    if (has) footerNote = targetName (id) + " is already on " + macroLabel (learnMacro) + " (right-click the macro to change it)";
+    else if (proc.assignMacro (learnMacro, id, 0.5f)) footerNote = targetName (id) + " -> " + macroLabel (learnMacro) + " at +50 %  -  keep clicking knobs, or click the macro / right-click to finish";
+    else footerNote = macroLabel (learnMacro) + " is full (" + juce::String (VvitchProcessor::kMaxTargets) + " targets)";
+    repaint();
+    return true;
+}
+
+// the targets next to each macro knob, and a small "M1 M3" tag on every knob a macro drives
+void Panel::paintMacroTargets (juce::Graphics& g)
+{
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+    {
+        const auto r = macroInfo[(size_t) m];
+        if (r.isEmpty()) continue;
+        const auto t = proc.macroTargets (m);
+        if (learnMacro == m) { g.setColour (kPri.withAlpha (0.10f)); g.fillRoundedRectangle (r.expanded (2).toFloat(), 3.0f); }
+        g.setFont (uiFont (9.0f));
+        int y = r.getY();
+        if (t.empty()) { g.setColour (kDim.withAlpha (0.6f)); g.drawText (learnMacro == m ? "click knobs" : "no targets", r.getX(), y, r.getWidth(), 12, juce::Justification::centredLeft); continue; }
+        const int maxLines = juce::jmax (1, r.getHeight() / 12);
+        for (int i = 0; i < (int) t.size(); ++i)
+        {
+            if (i == maxLines - 1 && (int) t.size() > maxLines) { g.setColour (kDim); g.drawText ("+" + juce::String ((int) t.size() - i) + " more", r.getX(), y, r.getWidth(), 12, juce::Justification::centredLeft); break; }
+            const auto pct = (t[(size_t) i].amount > 0 ? "+" : "") + juce::String (juce::roundToInt (t[(size_t) i].amount * 100.0f));
+            g.setColour (kSec.withAlpha (0.95f));
+            g.drawFittedText (targetName (t[(size_t) i].id), r.getX(), y, r.getWidth() - 24, 12, juce::Justification::centredLeft, 1, 0.7f);
+            g.setColour (t[(size_t) i].amount < 0 ? kDim : kPri);
+            g.drawText (pct, r.getRight() - 24, y, 24, 12, juce::Justification::centredRight);
+            y += 12;
+        }
+    }
+    // tags on the target knobs
+    g.setFont (uiFont (8.5f, true));
+    for (auto& pr : paramOf)
+    {
+        const auto& id = pr.second;
+        if (id.startsWith ("macro")) continue;
+        juce::StringArray tags;
+        for (int m = 0; m < VvitchProcessor::kMacros; ++m) for (auto& t : proc.macroTargets (m)) if (t.id == id) tags.add (juce::String (m + 1));
+        if (tags.isEmpty()) continue;
+        const auto b = pr.first->getBounds();
+        const juce::String txt = "M" + tags.joinIntoString (",");
+        const int w = juce::jmin (b.getWidth() / 2, 8 + 6 * txt.length());
+        juce::Rectangle<int> tr (b.getRight() - w, b.getY(), w, 11);   // top-right corner of the knob cell, clear of the label row
+        g.setColour (kPri.withAlpha (learnMacro >= 0 ? 0.35f : 0.18f)); g.fillRoundedRectangle (tr.toFloat(), 3.0f);
+        g.setColour (kPri.withAlpha (0.9f)); g.drawText (txt, tr, juce::Justification::centred);
+    }
 }
 
 void Panel::demoKnobMenu()
@@ -866,6 +997,8 @@ void Panel::paint (juce::Graphics& g)
         g.drawText ("FREE  /  GPLv3  /  CMPLXTY.MUSIC", (int) em.getX() + 124, (int) em.getY() + 82, 240, 14, juce::Justification::centredLeft);
     }
 
+    paintMacroTargets (g);
+
     // footer: version, notes, update switch
     g.setFont (uiFont (11.0f));
     g.setColour (kDim.withAlpha (0.8f));
@@ -904,7 +1037,15 @@ void Panel::resized()
             {
                 auto& k = *knobBoxes[ki++];
                 juce::Rectangle<int> r (kx, body.getY(), kw, body.getHeight()); kx += kw;
-                k.label.setBounds (r.removeFromTop (16)); k.slider.setBounds (r);
+                const int mi = juce::String (c.id).startsWith ("macro") ? juce::String (c.id).getTrailingIntValue() - 1 : -1;
+                if (mi >= 0 && mi < VvitchProcessor::kMacros)
+                {   // 1.2.0: knob on the left, its targets listed on the right
+                    auto lab = r.removeFromTop (16);
+                    auto kn = r.removeFromLeft (juce::jmin (64, r.getWidth() / 2));
+                    k.label.setBounds (lab.withWidth (kn.getWidth() + 8).withX (kn.getX() - 4)); k.slider.setBounds (kn);
+                    macroInfo[(size_t) mi] = r.withTrimmedLeft (4).withTrimmedRight (6).withTrimmedTop (2).withTrimmedBottom (4);
+                }
+                else { k.label.setBounds (r.removeFromTop (16)); k.slider.setBounds (r); }
             }
             else if (c.kind == 'c')
             {

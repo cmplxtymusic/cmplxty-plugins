@@ -4,6 +4,8 @@ Free witch house polysynth by CMPLXTY: glassy detuned saws, chip-crushed leads, 
 reverb. It is inspired by the sound of witch house and early-2010s dark electronic acts (Crystal Castles and friends) but is its own
 design and not a clone of any product. Instrument plug-in: MIDI in, stereo out, zero latency.
 
+**1.2.0:** The eight macros are now assignable. Right-click a macro for **Assign: click knobs...** (then click any knobs; each is added at +50%), its target list (click a target to set its amount from -100% to +100% or remove it), **Clear all targets** and **Restore stock targets**. Or right-click any knob for **Assign to macro...**. A macro can drive up to 8 knobs, and one knob can sit on several macros (they add up). The targets are listed next to each macro and small **M** tags mark the knobs a macro moves. The map is saved with your presets and with the project. Factory presets and presets/projects from 1.1.x use the stock targets, so they sound exactly as before. The macros stay automatable.
+
 **1.1.1:** Tape Age hiss now follows the sound and goes to true silence when you are not playing. The Age colour is still there on notes and tails. Factory presets such as Pale Static and Tape Funeral no longer leave a constant background hiss on an unused track.
 
 

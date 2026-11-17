@@ -4,6 +4,16 @@
 #include <random>
 #include <cmath>
 
+// 1.2.0: counts heap allocations made on a thread while it is flagged (the audio-thread check for the macro map)
+static thread_local bool gCountAllocs = false;
+static std::atomic<long> gAllocs { 0 };
+void* operator new (std::size_t n) { if (gCountAllocs) ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
+void* operator new[] (std::size_t n) { if (gCountAllocs) ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
+
 namespace
 {
 int fails = 0;
@@ -195,6 +205,70 @@ int procTests()
         proc.presets.loadFile (f); check (proc.macroName (0) == "Shinex", "a user preset carries its macro names");
         f.deleteFile();
     }
+#ifdef VV_HAS_MACRO_MAP
+    {   // 1.2.0: macro assignment
+        VvitchProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+        auto ids = [&] (int m) { juce::StringArray a; for (auto& t : proc.macroTargets (m)) a.add (t.id + ":" + juce::String (t.amount, 2)); return a.joinIntoString (","); };
+        check (ids (0) == "cutoff:0.35,reso:0.20" && ids (3) == "chipMix:0.80,bits:-0.60,crushHz:-0.50" && ids (7) == "fx1Mix:0.60,fx2Mix:0.60,fx3Mix:0.60,fx4Mix:0.60",
+               "default map = the 1.1.x stock targets (BRIGHT, CRUSH, FX ...)");
+        bool allDefault = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) allDefault &= proc.macroIsDefault (m);
+        check (allDefault, "every macro starts on its stock targets");
+        // reassign: M2 (SPACE) -> cutoff -100 %, reso +40 %, plus up to 8 targets
+        proc.presets.loadFactory (1);
+        proc.clearMacro (1);
+        check (proc.assignMacro (1, "cutoff", -1.0f) && proc.assignMacro (1, "reso", 0.4f), "assign two targets to M2");
+        const auto a0 = proc.currentParams(); set (proc, "macro2", 1.0f); const auto a1 = proc.currentParams();
+        check (a1.cutoff < a0.cutoff * 0.05f && a1.reso > a0.reso + 0.35f && std::fabs (a1.revMix - a0.revMix) < 1e-6f, "M2 now closes the cutoff and opens the resonance; the reverb (old target) no longer moves");
+        set (proc, "macro2", 0.5f); const auto ah = proc.currentParams();
+        check (ah.cutoff < a0.cutoff && ah.cutoff > a1.cutoff, "half way = in between");
+        set (proc, "macro2", 0.0f);
+        check (! proc.assignMacro (1, "w1", 0.5f) && ! proc.assignMacro (1, "macro3", 0.5f) && ! proc.assignMacro (1, "nope", 0.5f), "combo / switch / macro / unknown ids can't be targets");
+        const char* more[] = { "drive", "noise", "vox", "width", "detune", "pwm" }; int added = 0;
+        for (auto* id : more) added += proc.assignMacro (1, id, 0.25f) ? 1 : 0;
+        check (added == 6 && (int) proc.macroTargets (1).size() == VvitchProcessor::kMaxTargets && ! proc.assignMacro (1, "glide", 0.1f), "up to 8 targets per macro (the 9th is refused)");
+        proc.assignMacro (1, "reso", 2.5f); check (std::fabs (proc.macroAmount (1, "reso") - 1.0f) < 1e-6f, "amounts are clamped to -100..+100 %");
+        proc.removeMacroTarget (1, "drive"); check ((int) proc.macroTargets (1).size() == 7 && proc.macroAmount (1, "drive") == 0.0f, "remove one target");
+        // the same knob on two macros adds up
+        proc.assignMacro (0, "reso", 0.3f);
+        set (proc, "macro1", 1.0f); set (proc, "macro2", 1.0f); const auto both = proc.currentParams(); set (proc, "macro1", 0.0f); set (proc, "macro2", 0.0f);
+        check (both.reso >= 0.999f, "two macros on one knob add up (clamped to the knob's range)");
+        // session state
+        juce::MemoryBlock mb; proc.getStateInformation (mb);
+        VvitchProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (p2.macroMapString() == proc.macroMapString() && ! p2.macroIsDefault (1) && std::fabs (p2.macroAmount (1, "cutoff") + 1.0f) < 1e-6f, "the macro map survives the session state");
+        // user preset carries it; factory preset restores the stock map; a 1.1.x user preset (no map) gets the stock map
+        auto f = juce::File::createTempFile (".cmplxtypreset");
+        proc.presets.saveFile (f, "map test");
+        proc.presets.loadFactory (3); bool stock = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) stock &= proc.macroIsDefault (m);
+        check (stock, "a factory preset loads with the stock macro targets");
+        proc.presets.loadFile (f); check (std::fabs (proc.macroAmount (1, "cutoff") + 1.0f) < 1e-6f && (int) proc.macroTargets (1).size() == 7, "a user preset carries its macro map");
+        auto x = juce::XmlDocument::parse (f); x->getChildByName ("EXTRA")->removeAttribute ("macroMap"); x->writeTo (f);
+        proc.presets.loadFile (f); stock = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) stock &= proc.macroIsDefault (m);
+        check (stock, "a 1.1.x user preset (no map) loads with the stock macro targets");
+        f.deleteFile();
+        {   // a 1.1.x session (no map in the state) -> stock map
+            VvitchProcessor p3; p3.clearMacro (0);
+            juce::MemoryBlock m3; p3.getStateInformation (m3);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (m3.getData(), (int) m3.getSize()); xml->removeAttribute ("macroMap");
+            juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            p3.setStateInformation (old.getData(), (int) old.getSize());
+            check (p3.macroIsDefault (0), "a 1.1.x session (no map) restores the stock macro targets");
+        }
+        // audio thread: no allocation while macros move and the map is edited between blocks
+        proc.presets.loadFactory (10);
+        juce::AudioBuffer<float> buf (2, bs); long allocs = 0;
+        proc.queueNote (48, 0.9f); proc.queueNote (55, 0.8f);
+        for (int b = 0; b < 2000; ++b)
+        {
+            if (b % 50 == 0) { proc.assignMacro (b / 50 % 8, "cutoff", (float) ((b / 50) % 21 - 10) / 10.0f); }   // edits on this (message) thread, between blocks
+            set (proc, "macro1", (float) (b % 100) / 100.0f); set (proc, "macro5", (float) ((b * 7) % 100) / 100.0f);
+            juce::MidiBuffer m; buf.clear();
+            gAllocs = 0; gCountAllocs = true; proc.processBlock (buf, m); gCountAllocs = false; allocs += gAllocs.load();
+        }
+        std::printf ("  heap allocations inside processBlock over 2000 blocks with moving macros + map edits: %ld\n", allocs);
+        check (allocs == 0, "processBlock never allocates (macro map read from atomics)");
+    }
+#endif
     {   // 1.1.0: FX RACK: off = bit-identical bypass; every type renders finite, non-silent audio; mix 0 = bypass
         auto run = [&] (int type, float mix)
         {
@@ -236,6 +310,64 @@ int main (int argc, char** argv)
     if (mode == "proc") return procTests();
     VvitchProcessor proc;
     proc.setPlayConfigDetails (0, 2, 48000.0, 512); proc.prepareToPlay (48000.0, 512);
+    if (mode == "render")   // every factory preset: a chord, macros all at argv[3] (0 = default), raw float32 stereo into folder `out`
+    {
+        const juce::File dir (juce::File::getCurrentWorkingDirectory().getChildFile (out)); dir.createDirectory();
+        const float mv = argc > 3 ? (float) std::atof (argv[3]) : 0.0f;
+        const int n = proc.presets.numFactory(); double sec = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            VvitchProcessor p; p.setPlayConfigDetails (0, 2, 48000.0, 480); p.prepareToPlay (48000.0, 480); p.presets.loadFactory (i);
+            for (int m = 1; m <= VvitchProcessor::kMacros; ++m) if (auto* q = p.apvts.getParameter ("macro" + juce::String (m))) q->setValueNotifyingHost (mv);
+            juce::MemoryOutputStream mo;
+            juce::AudioBuffer<float> b (2, 480);
+            for (int blk = 0; blk < 300; ++blk)   // 3 s: chord on at 0, off at 2 s
+            {
+                juce::MidiBuffer m;
+                if (blk == 0) for (int nt : { 48, 55, 63 }) m.addEvent (juce::MidiMessage::noteOn (1, nt, 0.85f), 7);
+                if (blk == 200) for (int nt : { 48, 55, 63 }) m.addEvent (juce::MidiMessage::noteOff (1, nt), 0);
+                b.clear(); const auto t0 = juce::Time::getHighResolutionTicks(); p.processBlock (b, m); sec += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                for (int k = 0; k < 480; ++k) { mo.writeFloat (b.getSample (0, k)); mo.writeFloat (b.getSample (1, k)); }
+            }
+            dir.getChildFile ("p" + juce::String (i).paddedLeft ('0', 2) + ".f32").replaceWithData (mo.getData(), mo.getDataSize());
+        }
+        std::printf ("RENDERED %d presets, macros at %.2f; audio thread %.1f ms for %.0f s of audio (%.3f %% of one core)\n", n, mv, sec * 1000.0, n * 3.0, sec / (n * 3.0) * 100.0);
+        return 0;
+    }
+#ifdef VV_HAS_MACRO_MAP
+    if (mode == "sweep")   // a reassigned macro, automated 0 -> 1 over 8 s while a chord holds; raw float32 into folder `out`
+    {
+        const juce::File dir (juce::File::getCurrentWorkingDirectory().getChildFile (out)); dir.createDirectory();
+        struct Case { const char* tag; int preset; int macro; std::vector<std::pair<const char*, float>> targets; };
+        const std::vector<Case> cases {
+            { "init_M2_cutoff+100", 0, 1, { { "cutoff", 1.0f } } },
+            { "init_M2_cleared",    0, 1, {} },
+            { "init_M2_stock",      0, 1, { { "*", 0 } } },
+            { "init_M3_cutoff-100_reso+60", 0, 2, { { "cutoff", -1.0f }, { "reso", 0.6f } } },
+            { "init_M8_noise+80_detune+50_width+100_pwm+70", 0, 7, { { "noise", 0.8f }, { "detune", 0.5f }, { "width", 1.0f }, { "pwm", 0.7f } } },
+        };
+        for (auto& c : cases)
+        {
+            VvitchProcessor p; p.setPlayConfigDetails (0, 2, 48000.0, 480); p.prepareToPlay (48000.0, 480); p.presets.loadFactory (c.preset);
+            if (c.targets.empty() || juce::String (c.targets[0].first) != "*") { p.clearMacro (c.macro); for (auto& t : c.targets) p.assignMacro (c.macro, t.first, t.second); }
+            auto* mq = p.apvts.getParameter ("macro" + juce::String (c.macro + 1));
+            juce::AudioBuffer<float> all (2, 48000 * 9); all.clear(); juce::AudioBuffer<float> b (2, 480);
+            for (int blk = 0; blk < 900; ++blk)
+            {
+                juce::MidiBuffer m;
+                if (blk == 0) for (int nt : { 48, 55, 60 }) m.addEvent (juce::MidiMessage::noteOn (1, nt, 0.85f), 0);
+                mq->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, (blk - 50) / 800.0f));   // host automation: 0 for 0.5 s, then a ramp to 1 at 8.5 s
+                b.clear(); p.processBlock (b, m);
+                for (int ch = 0; ch < 2; ++ch) all.copyFrom (ch, blk * 480, b, ch, 0, 480);
+            }
+            juce::MemoryOutputStream mo;   // raw float32, stereo interleaved, 48 kHz (no audio-format module in this test app)
+            for (int k = 0; k < all.getNumSamples(); ++k) { mo.writeFloat (all.getSample (0, k)); mo.writeFloat (all.getSample (1, k)); }
+            dir.getChildFile (juce::String (c.tag) + ".f32").replaceWithData (mo.getData(), mo.getDataSize());
+            std::printf ("  %s: map %s\n", c.tag, p.macroMapString().toRawUTF8());
+        }
+        return 0;
+    }
+#endif
     if (mode == "params")
     {
         int bad = 0;

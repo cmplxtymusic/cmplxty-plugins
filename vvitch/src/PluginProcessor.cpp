@@ -98,12 +98,13 @@ enum I { w1, oct1, lvl1, w2, semi2, fine2, lvl2, pw, pwm, pwmRate, uni, detune, 
          fx1Type, fx1A, fx1B, fx1Mix, fx2Type, fx2A, fx2B, fx2Mix, fx3Type, fx3A, fx3B, fx3Mix, fx4Type, fx4A, fx4B, fx4Mix,
          macro1, macro2, macro3, macro4, macro5, macro6, macro7, macro8, kNumParams };
 static_assert (sizeof (kParams) / sizeof (kParams[0]) == kNumParams, "parameter table and index enum disagree");
-// Macros: each one pushes a fixed set of targets by a normalised (0..1 of the knob's travel) amount, ON TOP of whatever the
+// Macros: each one pushes its targets by a normalised (0..1 of the knob's travel) amount, ON TOP of whatever the
 // preset stores. Nothing stored is changed, so every factory and user preset (old or new) responds to all eight macros.
-struct MacroTarget { int param; float depth; };
-const std::vector<MacroTarget>& macroTargets (int m)
+// 1.2.0: these are the DEFAULT targets (the 1.1.x fixed ones); users can reassign every macro (see assignMacro).
+struct StockTarget { int param; float depth; };
+const std::vector<StockTarget>& stockTargets (int m)
 {
-    static const std::vector<MacroTarget> t[VvitchProcessor::kMacros] = {
+    static const std::vector<StockTarget> t[VvitchProcessor::kMacros] = {
         { { cutoff, 0.35f }, { reso, 0.2f } },                                  // Bright
         { { revMix, 0.5f }, { revSize, 0.3f }, { dlyMix, 0.3f } },              // Space
         { { wow, 0.5f }, { flutter, 0.4f }, { age, 0.6f } },                    // Tape
@@ -136,6 +137,109 @@ void VvitchProcessor::setMacroName (int m, const juce::String& name)
     apvts.state.setProperty ("macroNames", parts.joinIntoString ("|"), nullptr);
 }
 
+int VvitchProcessor::paramIndex (const juce::String& id) const
+{
+    for (int i = 0; i < kNumParams; ++i) if (id == kParams[i].id) return i;
+    return -1;
+}
+bool VvitchProcessor::isAssignable (const juce::String& id) const
+{
+    const int i = paramIndex (id);
+    return i >= 0 && kParams[i].type == 'f' && ! (i >= macro1 && i <= macro8);
+}
+std::vector<VvitchProcessor::MacroTarget> VvitchProcessor::macroTargets (int m) const
+{
+    return m >= 0 && m < kMacros ? mapEdit[(size_t) m] : std::vector<MacroTarget>();
+}
+float VvitchProcessor::macroAmount (int m, const juce::String& id) const
+{
+    if (m < 0 || m >= kMacros) return 0.0f;
+    for (auto& t : mapEdit[(size_t) m]) if (t.id == id) return t.amount;
+    return 0.0f;
+}
+bool VvitchProcessor::macroIsDefault (int m) const
+{
+    if (m < 0 || m >= kMacros) return true;
+    const auto& st = stockTargets (m); const auto& cur = mapEdit[(size_t) m];
+    if (st.size() != cur.size()) return false;
+    for (size_t k = 0; k < st.size(); ++k) if (cur[k].id != kParams[st[k].param].id || cur[k].amount != st[k].depth) return false;
+    return true;
+}
+static float cleanAmount (float a) { return std::isfinite (a) ? juce::jlimit (-1.0f, 1.0f, a) : 0.0f; }
+bool VvitchProcessor::assignMacro (int m, const juce::String& id, float amount)
+{
+    if (m < 0 || m >= kMacros || ! isAssignable (id)) return false;
+    auto& v = mapEdit[(size_t) m];
+    for (auto& t : v) if (t.id == id) { t.amount = cleanAmount (amount); publishMap(); return true; }
+    if ((int) v.size() >= kMaxTargets) return false;
+    v.push_back ({ id, cleanAmount (amount) }); publishMap(); return true;
+}
+void VvitchProcessor::removeMacroTarget (int m, const juce::String& id)
+{
+    if (m < 0 || m >= kMacros) return;
+    auto& v = mapEdit[(size_t) m];
+    v.erase (std::remove_if (v.begin(), v.end(), [&] (const MacroTarget& t) { return t.id == id; }), v.end());
+    publishMap();
+}
+void VvitchProcessor::clearMacro (int m) { if (m >= 0 && m < kMacros) { mapEdit[(size_t) m].clear(); publishMap(); } }
+void VvitchProcessor::restoreDefaultMacro (int m)
+{
+    if (m < 0 || m >= kMacros) return;
+    auto& v = mapEdit[(size_t) m]; v.clear();
+    for (auto& t : stockTargets (m)) v.push_back ({ kParams[t.param].id, t.depth });
+    publishMap();
+}
+juce::String VvitchProcessor::macroMapString() const
+{
+    juce::StringArray groups;
+    for (int m = 0; m < kMacros; ++m)
+    {
+        juce::StringArray g;
+        for (auto& t : mapEdit[(size_t) m]) g.add (t.id + ":" + juce::String (t.amount, 6));
+        groups.add (g.joinIntoString (","));
+    }
+    return groups.joinIntoString ("|");
+}
+void VvitchProcessor::setMacroMapString (const juce::String& str)
+{
+    if (str.trim().isEmpty() || ! str.containsChar ('|'))   // no map (1.1.x session / preset, factory preset): the stock targets
+    {
+        for (int m = 0; m < kMacros; ++m)
+        {
+            auto& v = mapEdit[(size_t) m]; v.clear();
+            for (auto& t : stockTargets (m)) v.push_back ({ kParams[t.param].id, t.depth });
+        }
+        publishMap(); return;
+    }
+    const auto groups = juce::StringArray::fromTokens (str, "|", "");
+    for (int m = 0; m < kMacros; ++m)
+    {
+        auto& v = mapEdit[(size_t) m]; v.clear();
+        if (m >= groups.size()) continue;
+        for (auto& item : juce::StringArray::fromTokens (groups[m], ",", ""))
+        {
+            const auto id = item.upToFirstOccurrenceOf (":", false, false).trim();
+            const float a = cleanAmount (item.fromFirstOccurrenceOf (":", false, false).getFloatValue());
+            if (isAssignable (id) && (int) v.size() < kMaxTargets && std::none_of (v.begin(), v.end(), [&] (const MacroTarget& t) { return t.id == id; }))
+                v.push_back ({ id, a });
+        }
+    }
+    publishMap();
+}
+// copies the edit map into the audio thread's atomics and into the state tree (saved with the session)
+void VvitchProcessor::publishMap()
+{
+    for (int m = 0; m < kMacros; ++m)
+        for (int k = 0; k < kMaxTargets; ++k)
+        {
+            const auto& v = mapEdit[(size_t) m];
+            const int slot = m * kMaxTargets + k;
+            if (k < (int) v.size()) { mapAmount[(size_t) slot].store (v[(size_t) k].amount, std::memory_order_relaxed); mapParam[(size_t) slot].store (paramIndex (v[(size_t) k].id), std::memory_order_release); }
+            else mapParam[(size_t) slot].store (-1, std::memory_order_release);
+        }
+    apvts.state.setProperty ("macroMap", macroMapString(), nullptr);
+}
+
 VvitchProcessor::VvitchProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, &undoManager, "STATE", vv::makeLayout (kParams)),
@@ -144,24 +248,24 @@ VvitchProcessor::VvitchProcessor()
     for (auto& d : kParams) raw.push_back (apvts.getRawParameterValue (d.id));
     for (auto& d : kParams) ranges.push_back (apvts.getParameterRange (d.id));
     // macro names travel with user presets; a factory preset (nullptr) restores the default names
-    presets.saveExtra = [this] (juce::XmlElement& x) { for (int m = 0; m < kMacros; ++m) x.setAttribute ("macro" + juce::String (m + 1), macroName (m)); };
+    presets.saveExtra = [this] (juce::XmlElement& x) { for (int m = 0; m < kMacros; ++m) x.setAttribute ("macro" + juce::String (m + 1), macroName (m));
+                                                       x.setAttribute ("macroMap", macroMapString()); };
     presets.loadExtra = [this] (const juce::XmlElement* x)
     {
         juce::StringArray parts;
         for (int m = 0; m < kMacros; ++m) parts.add (x != nullptr ? x->getStringAttribute ("macro" + juce::String (m + 1), defaultMacroName (m)) : juce::String (defaultMacroName (m)));
         apvts.state.setProperty ("macroNames", parts.joinIntoString ("|"), nullptr);
+        // 1.2.0: a user preset carries its macro map; factory presets and 1.1.x user presets (no map) get the stock targets
+        setMacroMapString (x != nullptr ? x->getStringAttribute ("macroMap") : juce::String());
     };
+    for (auto& a : mapParam) a.store (-1);
+    for (auto& a : mapAmount) a.store (0.0f);
+    setMacroMapString ({});
 }
 
-float VvitchProcessor::mval (int i) const
+float VvitchProcessor::mval (int i, const float* offsets) const
 {
-    float off = 0;
-    for (int m = 0; m < kMacros; ++m)
-    {
-        const float a = val (macro1 + m);
-        if (a <= 0.0f) continue;
-        for (auto& t : macroTargets (m)) if (t.param == i) off += a * t.depth;
-    }
+    const float off = offsets[i];
     if (off == 0.0f) return val (i);
     const auto& r = ranges[(size_t) i];
     return r.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, r.convertTo0to1 (r.snapToLegalValue (val (i))) + off));
@@ -180,6 +284,21 @@ vv::dsp::Params VvitchProcessor::currentParams() const
     using namespace vv::dsp;
     Params p;
     auto ci = [this] (int i, int hi) { return juce::jlimit (0, hi, (int) val (i)); };
+    // macro offsets per parameter, summed in the same order as 1.1.x (macro 1..8, then each macro's targets in order) so the stock map
+    // gives bit-identical values. Stack array + relaxed atomics: no allocation, no lock (this runs on the audio thread every block).
+    std::array<float, kNumParams> off {};
+    for (int m = 0; m < kMacros; ++m)
+    {
+        const float a = val (macro1 + m);
+        if (a <= 0.0f) continue;
+        for (int k = 0; k < kMaxTargets; ++k)
+        {
+            const int pi = mapParam[(size_t) (m * kMaxTargets + k)].load (std::memory_order_acquire);
+            if (pi < 0 || pi >= kNumParams) continue;
+            off[(size_t) pi] += a * mapAmount[(size_t) (m * kMaxTargets + k)].load (std::memory_order_relaxed);
+        }
+    }
+    auto mval = [this, &off] (int i) { return this->mval (i, off.data()); };
     p.w1 = ci (w1, 3); p.oct1 = (float) juce::roundToInt (mval (oct1)); p.lvl1 = mval (lvl1);
     p.w2 = ci (w2, 3); p.semi2 = mval (semi2); p.fine2 = mval (fine2); p.lvl2 = mval (lvl2);
     p.pw = mval (pw); p.pwm = mval (pwm); p.pwmRate = mval (pwmRate);
@@ -271,6 +390,7 @@ void VvitchProcessor::setStateInformation (const void* data, int size)
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    setMacroMapString (apvts.state.getProperty ("macroMap").toString());   // 1.1.x sessions have none: the stock targets
 }
 
 juce::AudioProcessorEditor* VvitchProcessor::createEditor() { return new VvitchEditor (*this); }

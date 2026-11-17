@@ -31,13 +31,17 @@ struct Knob : juce::Slider, private juce::Label::Listener
     // Typing a value is only offered from the right-click menu: a plain click on the value text must never open an editor (it grabbed the focus).
     void typeValue() { setTextBoxIsEditable (true); noFocus(); showTextBox(); }
     std::function<void (Knob&, juce::Point<int> screenPos)> onContextMenu;
+    std::function<bool (Knob&)> onClickIntercept;   // 1.2.0 macro "click a knob to assign" mode: true = the click was used, the knob does not move
     void mouseDown (const juce::MouseEvent& e) override
     {
+        intercepted = false;
         if (e.mods.isPopupMenu() && onContextMenu) { onContextMenu (*this, e.getScreenPosition()); return; }
+        if (onClickIntercept && onClickIntercept (*this)) { intercepted = true; return; }
         juce::Slider::mouseDown (e);
     }
-    void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseUp (e); }
-    void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::Slider::mouseDrag (e); }
+    void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseUp (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseDrag (e); }
+    bool intercepted = false;
 
     // The value text box is a juce::Label. Slider switches "wants keyboard focus" back ON for it (it is click-to-type) every time the look-and-feel
     // or the enabled state changes, and a click anywhere near it then moved the native keyboard focus into the plug-in window (Space stopped
@@ -151,6 +155,15 @@ public:
     void setNote (const juce::String& s) { footerNote = s; repaint (footerArea); }
     juce::Component* display() { return disp.get(); }
     void showParamMenu (const juce::String& paramId, vvui::Knob* knob, juce::Point<int> pos);   // right-click menu for a knob / combo / switch
+    // 1.2.0 macro assignment UI (right-click a macro: assign / targets / clear; right-click any knob: Assign to macro)
+    void showAssignMenu (const juce::String& paramId, juce::Point<int> pos);
+    void showAmountMenu (int macro, const juce::String& paramId, juce::Point<int> pos);
+    void startAssign (int macro);
+    void endAssign();
+    int assigningMacro() const { return learnMacro; }
+    bool learnClick (const juce::String& paramId);   // a knob clicked while assigning (also the test hook)
+    juce::String macroLabel (int m) const;            // "M1 BRIGHT"
+    juce::String targetName (const juce::String& paramId) const;
 
     struct Look : juce::LookAndFeel_V4
     {
@@ -214,6 +227,10 @@ private:
     juce::String footerNote;
     bool updatesOn = true;
     std::vector<std::pair<juce::Component*, juce::String>> paramOf;   // right-click target -> parameter id
+    int learnMacro = -1;                                               // macro being assigned by clicking knobs (-1 = off)
+    std::array<juce::Rectangle<int>, VvitchProcessor::kMacros> macroInfo;   // target list next to each macro knob
+    juce::String lastMap;
+    void paintMacroTargets (juce::Graphics&);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Panel)
 };
