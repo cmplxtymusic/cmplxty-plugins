@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vvitch VERSION 1.2.0 LANGUAGES C CXX)
+project(Vvitch VERSION 1.3.0 LANGUAGES C CXX)
 # Linux builds are for the tests only; the box sysroot has no libxi headers and plug-ins don't need XInput2 touch / pen input
 if(UNIX AND NOT APPLE)
     add_compile_definitions(JUCE_USE_XINPUT=0)
@@ -49,7 +49,8 @@ target_sources(Vvitch PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
     src/Layout.cpp
-    src/Presets.cpp)
+    src/Presets.cpp
+    src/FactoryMacros.cpp)
 
 target_compile_definitions(Vvitch PUBLIC
     JUCE_WEB_BROWSER=0
@@ -77,7 +78,7 @@ set_target_properties(VvitchUpdateTest PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 # Renders the real editor to a PNG (run under Xvfb on Linux):  VvitchScreenshot out.png [banner|menu]
 juce_add_console_app(VvitchScreenshot PRODUCT_NAME "VvitchScreenshot")
-target_sources(VvitchScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp src/Presets.cpp)
+target_sources(VvitchScreenshot PRIVATE test/screenshot.cpp src/PluginProcessor.cpp src/PluginEditor.cpp src/Layout.cpp src/Presets.cpp src/FactoryMacros.cpp)
 target_include_directories(VvitchScreenshot PRIVATE src)
 target_link_libraries(VvitchScreenshot PRIVATE VVAssets juce::juce_audio_utils juce::juce_recommended_config_flags)
 target_compile_definitions(VvitchScreenshot PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1

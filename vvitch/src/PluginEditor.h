@@ -32,16 +32,29 @@ struct Knob : juce::Slider, private juce::Label::Listener
     void typeValue() { setTextBoxIsEditable (true); noFocus(); showTextBox(); }
     std::function<void (Knob&, juce::Point<int> screenPos)> onContextMenu;
     std::function<bool (Knob&)> onClickIntercept;   // 1.2.0 macro "click a knob to assign" mode: true = the click was used, the knob does not move
+    // 1.3.0: a press on the macro ring around the knob (or Alt + drag anywhere on it) changes a macro amount instead of the knob
+    std::function<bool (Knob&, const juce::MouseEvent&)> onModDown;
+    std::function<void (Knob&, const juce::MouseEvent&)> onModDrag, onModUp;
     void mouseDown (const juce::MouseEvent& e) override
     {
-        intercepted = false;
+        intercepted = false; modDragging = false;
         if (e.mods.isPopupMenu() && onContextMenu) { onContextMenu (*this, e.getScreenPosition()); return; }
         if (onClickIntercept && onClickIntercept (*this)) { intercepted = true; return; }
+        if (onModDown && onModDown (*this, e)) { intercepted = modDragging = true; return; }
         juce::Slider::mouseDown (e);
     }
-    void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseUp (e); }
-    void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseDrag (e); }
-    bool intercepted = false;
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (modDragging) { modDragging = false; if (onModUp) onModUp (*this, e); return; }
+        if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseUp (e);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (modDragging) { if (onModDrag) onModDrag (*this, e); return; }
+        if (! e.mods.isPopupMenu() && ! intercepted) juce::Slider::mouseDrag (e);
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (! intercepted) juce::Slider::mouseDoubleClick (e); }
+    bool intercepted = false, modDragging = false;
 
     // The value text box is a juce::Label. Slider switches "wants keyboard focus" back ON for it (it is click-to-type) every time the look-and-feel
     // or the enabled state changes, and a click anywhere near it then moved the native keyboard focus into the plug-in window (Space stopped
@@ -70,6 +83,21 @@ struct Btn : juce::ToggleButton
     Btn() { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
     void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::ToggleButton::mouseDown (e); }
     void mouseUp (const juce::MouseEvent& e) override   { if (! e.mods.isPopupMenu()) juce::ToggleButton::mouseUp (e); }
+};
+
+// 1.3.0 Serum-style macro drag handle (a small grip next to each macro's name; the name itself drags too): drag it onto any knob
+// to make that knob one of the macro's targets. The panel does the work; this only paints the grip and forwards the mouse.
+struct MacroHandle : juce::Component, juce::SettableTooltipClient
+{
+    int macro = 0; bool hot = false;
+    std::function<void (int, const juce::MouseEvent&)> onDown, onDrag, onUp, onHover;
+    MacroHandle() { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+    void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent& e) override { hot = true; repaint(); if (onHover) onHover (macro, e); }
+    void mouseExit (const juce::MouseEvent&) override  { hot = false; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && onDown) onDown (macro, e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && onDrag) onDrag (macro, e); }
+    void mouseUp (const juce::MouseEvent& e) override   { if (! e.mods.isPopupMenu() && onUp) onUp (macro, e); }
 };
 
 struct NoFocusCombo : juce::ComboBox
@@ -163,6 +191,10 @@ public:
     int assigningMacro() const { return learnMacro; }
     bool learnClick (const juce::String& paramId);   // a knob clicked while assigning (also the test hook)
     juce::String macroLabel (int m) const;            // "M1 BRIGHT"
+    // 1.3.0 drag and drop (macro grip -> knob) and the amount rings; the hooks below drive the real mouse handlers (tests / screenshots)
+    juce::String auditDragDrop();
+    void demoDrag (int macro, const juce::String& paramId);   // screenshot: freeze a drag over a knob
+    void paintOverChildren (juce::Graphics&) override;
     juce::String targetName (const juce::String& paramId) const;
 
     struct Look : juce::LookAndFeel_V4
@@ -231,6 +263,19 @@ private:
     std::array<juce::Rectangle<int>, VvitchProcessor::kMacros> macroInfo;   // target list next to each macro knob
     juce::String lastMap;
     void paintMacroTargets (juce::Graphics&);
+    // 1.3.0 drag and drop + rings
+    std::array<std::unique_ptr<vvui::MacroHandle>, VvitchProcessor::kMacros> handles;
+    int dragMacro = -1, focusMacro = 0, ringMacro = -1; bool dragLive = false, dragFromLabel = false;
+    juce::Point<float> dragFrom, dragPos; juce::String dropId, ringId; float ringStart = 0.0f, ringY = 0.0f;
+    void macroDown (int m, const juce::MouseEvent&, bool fromLabel);
+    void macroDrag (int m, const juce::MouseEvent&);
+    void macroUp (int m, const juce::MouseEvent&);
+    juce::String knobIdAt (juce::Point<float> panelPos) const;
+    void setDropHover (const juce::String& id, int state);
+    void refreshModRings();
+    int ringMacroFor (const juce::String& id) const;   // the macro whose ring a press on this knob adjusts (-1 = none)
+    bool modDown (const juce::String& id, vvui::Knob&, const juce::MouseEvent&);
+    void modDrag (const juce::String& id, const juce::MouseEvent&);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Panel)
 };

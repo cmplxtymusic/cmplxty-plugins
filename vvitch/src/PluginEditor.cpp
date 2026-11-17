@@ -316,6 +316,46 @@ void Panel::Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int 
     const float pr1 = (rr - ring) * 0.35f, pr2 = (rr - ring) * 0.88f;
     juce::Path p; p.startNewSubPath (c.x + std::sin (ang) * pr1, c.y - std::cos (ang) * pr1); p.lineTo (c.x + std::sin (ang) * pr2, c.y - std::cos (ang) * pr2);
     g.setColour (kSec); g.strokePath (p, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    // 1.3.0 macro rings (Serum style): an arc from the knob's value to where the macro takes it at full; the macro a ring drag / Alt-drag
+    // adjusts is the bright outer one, other macros on this knob are thin inner hairlines
+    auto& props = s.getProperties();
+    if (auto* mods = props["vvMods"].getArray())
+    {
+        const int focus = (int) props["vvFocus"];
+        for (int pass = 0; pass < 2; ++pass)
+            for (auto& mv : *mods)
+            {
+                const int m = (int) mv[0]; const float amt = (float) (double) mv[1];
+                const bool f = m == focus;
+                if ((pass == 0) == f) continue;   // others first, the focused one on top
+                const float to = juce::jlimit (0.0f, 1.0f, pos + amt), angTo = a0 + to * (a1 - a0);
+                const float rad = f ? r + 3.0f : r + 0.6f;
+                if (std::fabs (angTo - ang) > 0.005f)
+                {
+                    juce::Path arc; arc.addCentredArc (c.x, c.y, rad, rad, 0.0f, juce::jmin (ang, angTo), juce::jmax (ang, angTo), true);
+                    g.setColour (f ? (amt < 0 ? kSec : kPri) : kDim.withAlpha (0.8f));
+                    g.strokePath (arc, juce::PathStrokeType (f ? 2.2f : 1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                }
+                if (f) { g.setColour (kPri); g.fillEllipse (c.x + std::sin (angTo) * rad - 2.2f, c.y - std::cos (angTo) * rad - 2.2f, 4.4f, 4.4f); }
+            }
+    }
+    // drop target while a macro is dragged over this knob: 1 = will be added, 2 = already a target (no duplicate)
+    if (const int drop = (int) props["vvDrop"]; drop > 0)
+    {
+        g.setColour (kPri.withAlpha (drop == 1 ? 0.16f : 0.07f)); g.fillEllipse (c.x - r - 4.0f, c.y - r - 4.0f, (r + 4.0f) * 2.0f, (r + 4.0f) * 2.0f);
+        g.setColour (kPri.withAlpha (drop == 1 ? 1.0f : 0.5f)); g.drawEllipse (c.x - r - 4.0f, c.y - r - 4.0f, (r + 4.0f) * 2.0f, (r + 4.0f) * 2.0f, drop == 1 ? 2.0f : 1.0f);
+    }
+}
+
+void vvui::MacroHandle::paint (juce::Graphics& g)
+{
+    // six-dot grip in a rounded box
+    const auto b = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kPri.withAlpha (hot ? 0.22f : 0.08f)); g.fillRoundedRectangle (b, 3.0f);
+    g.setColour (kPri.withAlpha (hot ? 0.9f : 0.45f)); g.drawRoundedRectangle (b, 3.0f, 1.0f);
+    g.setColour (hot ? kPri : kSec);
+    for (int i = 0; i < 2; ++i) for (int j = 0; j < 3; ++j)
+        g.fillEllipse (b.getCentreX() - 3.0f + (float) i * 4.0f, b.getCentreY() - 5.0f + (float) j * 4.0f, 2.0f, 2.0f);
 }
 
 void Panel::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
@@ -366,6 +406,12 @@ Panel::KnobBox& Panel::addKnob (const char* id, const char* name)
     paramOf.push_back ({ &k.slider, id });
     k.slider.onContextMenu = [this, id = juce::String (id)] (vvui::Knob& kn, juce::Point<int> screenPos) { showParamMenu (id, &kn, getLocalPoint (nullptr, screenPos)); };
     k.slider.onClickIntercept = [this, id = juce::String (id)] (vvui::Knob&) { return learnMacro >= 0 && learnClick (id); };
+    if (! juce::String (id).startsWith ("macro"))
+    {
+        k.slider.onModDown = [this, id = juce::String (id)] (vvui::Knob& kn, const juce::MouseEvent& e) { return modDown (id, kn, e); };
+        k.slider.onModDrag = [this, id = juce::String (id)] (vvui::Knob&, const juce::MouseEvent& e) { modDrag (id, e); };
+        k.slider.onModUp   = [this] (vvui::Knob&, const juce::MouseEvent&) { ringMacro = -1; ringId = {}; };
+    }
     return k;
 }
 
@@ -477,6 +523,18 @@ Panel::Panel (VvitchProcessor& p, juce::AudioProcessorEditor& o) : proc (p), own
         auto s = vv::upd::Settings::load(); s.skipVersion = bannerInfo.version; s.save();
         banner.setVisible (false); footerNote = {}; repaint();
     };
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m)   // 1.3.0 drag handles (the macro name drags too)
+    {
+        auto& h = handles[(size_t) m]; h = std::make_unique<vvui::MacroHandle>(); h->macro = m;
+        h->setTooltip ("Drag onto any knob to make it a target of this macro");
+        h->onDown  = [this] (int mi, const juce::MouseEvent& e) { macroDown (mi, e, e.eventComponent != handles[(size_t) mi].get()); };
+        h->onDrag  = [this] (int mi, const juce::MouseEvent& e) { macroDrag (mi, e); };
+        h->onUp    = [this] (int mi, const juce::MouseEvent& e) { macroUp (mi, e); };
+        h->onHover = [this] (int mi, const juce::MouseEvent& e) { if (dragMacro < 0 && e.eventComponent == handles[(size_t) mi].get()) setNote ("Drag " + macroLabel (mi) + " onto any knob to assign it  -  then drag the ring (or Alt + drag the knob) for the amount"); };
+        addAndMakeVisible (*h);
+        if (auto* k = knobFor ("macro" + juce::String (m + 1))) k->label.addMouseListener (h.get(), false);
+    }
+    refreshModRings();
     addChildComponent (popup);
 
     updatesOn = vv::upd::Settings::load().enabled;
@@ -493,6 +551,7 @@ Panel::Panel (VvitchProcessor& p, juce::AudioProcessorEditor& o) : proc (p), own
 Panel::~Panel()
 {
     stopTimer();
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m) if (auto* k = knobFor ("macro" + juce::String (m + 1))) k->label.removeMouseListener (handles[(size_t) m].get());
     checker.cancelAndWait();
     disp.reset();
     for (auto& k : knobBoxes) { k->slider.setLookAndFeel (nullptr); k->label.setLookAndFeel (nullptr); }
@@ -519,7 +578,7 @@ void Panel::timerCallback()
     for (auto* b : { &presetPrev, &presetBtn, &presetNext }) if (b->isVisible() != showBar) b->setVisible (showBar);
     refreshRackLabels();
     const auto map = proc.macroMapString();
-    if (map != lastMap) { lastMap = map; repaint(); }
+    if (map != lastMap) { lastMap = map; refreshModRings(); repaint(); }
 }
 
 // FX slot knob labels follow the slot type; macro labels show the (user-editable) macro names.
@@ -742,7 +801,8 @@ void Panel::showParamMenu (const juce::String& id, vvui::Knob* knobPtr, juce::Po
                     v.push_back ({ "    " + targetName (t.id) + "\t" + (t.amount > 0 ? "+" : "") + juce::String (juce::roundToInt (t.amount * 100.0f)) + " %",
                                    [this, mi, tid = t.id, pos] { showAmountMenu (mi, tid, pos); } });
                 v.push_back ({ "C&lear all targets", [this, mi] { proc.clearMacro (mi); footerNote = macroLabel (mi) + ": no targets"; repaint(); }, ! targets.empty() });
-                v.push_back ({ "Restore &stock targets", [this, mi] { proc.restoreDefaultMacro (mi); footerNote = macroLabel (mi) + ": stock targets"; repaint(); }, ! proc.macroIsDefault (mi) });
+                v.push_back ({ proc.presetMacroSpec().isNotEmpty() ? "Restore &preset targets" : "Restore &stock targets",
+                               [this, mi] { proc.restoreDefaultMacro (mi); footerNote = macroLabel (mi) + ": " + (proc.presetMacroSpec().isNotEmpty() ? "the preset's own targets" : "stock targets"); repaint(); }, ! proc.macroIsDefault (mi) });
             }
             else if (proc.isAssignable (id))
             {
@@ -894,6 +954,150 @@ void Panel::paintMacroTargets (juce::Graphics& g)
     }
 }
 
+// ---- 1.3.0 drag and drop: macro grip / name -> knob
+juce::String Panel::knobIdAt (juce::Point<float> pt) const
+{
+    for (auto& pr : paramOf)
+        if (auto* kn = dynamic_cast<vvui::Knob*> (pr.first))
+            if (kn->isVisible() && kn->getParentComponent() == this && kn->getBounds().toFloat().contains (pt)) return pr.second;
+    return {};
+}
+void Panel::setDropHover (const juce::String& id, int state)
+{
+    for (auto& kb : knobBoxes)
+    {
+        const bool me = id.isNotEmpty() && paramIdOf (&kb->slider) == id;
+        const int want = me ? state : 0;
+        if ((int) kb->slider.getProperties()["vvDrop"] != want) { kb->slider.getProperties().set ("vvDrop", want); kb->slider.repaint(); }
+    }
+}
+void Panel::macroDown (int m, const juce::MouseEvent& e, bool fromLabel)
+{
+    if (learnMacro >= 0) endAssign();
+    dragMacro = m; dragLive = false; dragFromLabel = fromLabel;
+    dragFrom = dragPos = e.getEventRelativeTo (this).position; dropId = {};
+}
+void Panel::macroDrag (int m, const juce::MouseEvent& e)
+{
+    if (dragMacro != m) return;
+    dragPos = e.getEventRelativeTo (this).position;
+    if (! dragLive && dragPos.getDistanceFrom (dragFrom) < 5.0f) return;   // a click (or a double-click to rename) is not a drag
+    dragLive = true;
+    auto id = knobIdAt (dragPos);
+    if (id.isNotEmpty() && ! proc.isAssignable (id)) id = {};
+    dropId = id;
+    const bool has = id.isNotEmpty() && [&] { for (auto& t : proc.macroTargets (m)) if (t.id == id) return true; return false; }();
+    setDropHover (id, id.isEmpty() ? 0 : has ? 2 : 1);
+    footerNote = id.isEmpty() ? "Drop " + macroLabel (m) + " on a knob to assign it"
+               : has ? targetName (id) + " is already on " + macroLabel (m) + "  -  drag its ring to change the amount"
+                     : "Release to assign " + targetName (id) + " to " + macroLabel (m) + " at +50 %";
+    repaint();
+}
+void Panel::macroUp (int m, const juce::MouseEvent& e)
+{
+    if (dragMacro != m) return;
+    if (dragLive) macroDrag (m, e);
+    const auto id = dragLive ? dropId : juce::String();
+    const bool live = dragLive;
+    dragMacro = -1; dragLive = false; dropId = {}; setDropHover ({}, 0);
+    if (! live)
+    {
+        if (! dragFromLabel) { focusMacro = m; refreshModRings(); footerNote = macroLabel (m) + ": rings show its amounts  -  drag the grip onto a knob to add one"; }
+        repaint(); return;
+    }
+    focusMacro = m;
+    if (id.isEmpty()) footerNote = {};
+    else
+    {
+        bool has = false; for (auto& t : proc.macroTargets (m)) has |= t.id == id;
+        if (has) footerNote = targetName (id) + " is already on " + macroLabel (m) + " (not added twice)  -  drag its ring to change the amount";
+        else if (proc.assignMacro (m, id, 0.5f)) footerNote = targetName (id) + " -> " + macroLabel (m) + " at +50 %  -  drag the ring or Alt + drag the knob to change it";
+        else footerNote = macroLabel (m) + " is full (" + juce::String (VvitchProcessor::kMaxTargets) + " targets)";
+    }
+    refreshModRings(); repaint();
+}
+int Panel::ringMacroFor (const juce::String& id) const
+{
+    int first = -1;
+    for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+        for (auto& t : proc.macroTargets (m)) if (t.id == id) { if (m == focusMacro) return m; if (first < 0) first = m; }
+    return first;
+}
+void Panel::refreshModRings()
+{
+    for (auto& kb : knobBoxes)
+    {
+        const auto id = paramIdOf (&kb->slider);
+        if (id.isEmpty() || id.startsWith ("macro")) continue;
+        juce::Array<juce::var> mods;
+        for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+            for (auto& t : proc.macroTargets (m)) if (t.id == id) mods.add (juce::Array<juce::var> { m, (double) t.amount });
+        auto& pr = kb->slider.getProperties();
+        const juce::var nv = mods.isEmpty() ? juce::var() : juce::var (mods);
+        const int focus = ringMacroFor (id);
+        const auto key = juce::JSON::toString (nv, true) + "/" + juce::String (focus);
+        if (pr["vvModsKey"].toString() != key) { pr.set ("vvMods", nv); pr.set ("vvFocus", focus); pr.set ("vvModsKey", key); kb->slider.repaint(); }
+    }
+}
+bool Panel::modDown (const juce::String& id, vvui::Knob& kn, const juce::MouseEvent& e)
+{
+    const int m = ringMacroFor (id);
+    if (m < 0) return false;
+    bool onRing = e.mods.isAltDown();
+    if (! onRing)
+    {
+        const auto lay = kn.getLookAndFeel().getSliderLayout (kn);
+        const auto b = lay.sliderBounds.toFloat().reduced (6.0f);
+        const float r = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f, d = e.position.getDistanceFrom (b.getCentre());
+        onRing = d >= r - 1.0f && d <= r + 7.0f;
+    }
+    if (! onRing) return false;
+    ringMacro = m; ringId = id; ringStart = proc.macroAmount (m, id); ringY = e.position.y;
+    footerNote = macroLabel (m) + " > " + targetName (id) + ": " + (ringStart > 0 ? "+" : "") + juce::String (juce::roundToInt (ringStart * 100.0f)) + " %  (drag up / down, Shift = fine)";
+    repaint (footerArea);
+    return true;
+}
+void Panel::modDrag (const juce::String& id, const juce::MouseEvent& e)
+{
+    if (ringMacro < 0 || id != ringId) return;
+    const float sens = e.mods.isShiftDown() ? 600.0f : 150.0f;   // 150 px = 100 %
+    float a = juce::jlimit (-1.0f, 1.0f, ringStart + (ringY - e.position.y) / sens);
+    a = (float) juce::roundToInt (a * 100.0f) / 100.0f;
+    if (std::fabs (a - proc.macroAmount (ringMacro, id)) > 1.0e-6f) { proc.assignMacro (ringMacro, id, a); refreshModRings(); repaint(); }
+    footerNote = macroLabel (ringMacro) + " > " + targetName (id) + ": " + (a > 0 ? "+" : "") + juce::String (juce::roundToInt (a * 100.0f)) + " %";
+    repaint (footerArea);
+}
+void Panel::paintOverChildren (juce::Graphics& g)
+{
+    if (dragMacro < 0 || ! dragLive) return;
+    // a dotted line from the grip and a tag that follows the mouse
+    g.setColour (kPri.withAlpha (0.35f));
+    const float dash[] = { 3.0f, 3.0f };
+    g.drawDashedLine ({ dragFrom, dragPos }, dash, 2, 1.0f);
+    const auto txt = macroLabel (dragMacro);
+    g.setFont (uiFont (11.0f, true));
+    const float w = (float) juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), txt) + 30.0f;
+    const juce::Rectangle<float> tag (dragPos.x + 12.0f, dragPos.y - 26.0f, w, 20.0f);
+    g.setColour (juce::Colour (0xee0a0a0a)); g.fillRoundedRectangle (tag, 4.0f);
+    g.setColour (kPri.withAlpha (dropId.isNotEmpty() ? 1.0f : 0.6f)); g.drawRoundedRectangle (tag, 4.0f, 1.2f);
+    for (int i = 0; i < 2; ++i) for (int j = 0; j < 3; ++j) g.fillEllipse (tag.getX() + 7.0f + (float) i * 4.0f, tag.getCentreY() - 5.0f + (float) j * 4.0f, 2.0f, 2.0f);
+    g.drawText (txt, tag.withTrimmedLeft (20.0f).withTrimmedRight (6.0f), juce::Justification::centredLeft);
+}
+void Panel::demoDrag (int m, const juce::String& id)
+{
+    auto* h = handles[(size_t) m].get(); auto* k = knobFor (id);
+    if (h == nullptr || k == nullptr) return;
+    auto src = juce::Desktop::getInstance().getMainMouseSource(); const auto now = juce::Time::getCurrentTime();
+    auto ev = [&] (juce::Point<float> panelPt)
+    {
+        const auto lp = h->getLocalPoint (this, panelPt);
+        return juce::MouseEvent (src, lp, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, h, h, now, h->getLocalBounds().getCentre().toFloat(), now, 1, false);
+    };
+    const auto start = h->getBounds().getCentre().toFloat(), target = k->slider.getBounds().getCentre().toFloat().translated (6.0f, 4.0f);
+    h->mouseDown (ev (start));
+    for (int i = 1; i <= 10; ++i) h->mouseDrag (ev (start + (target - start) * ((float) i / 10.0f)));
+}
+
 void Panel::demoKnobMenu()
 {
     if (auto* k = knobFor (panelSpec().demoKnob)) showParamMenu (panelSpec().demoKnob, &k->slider, k->slider.getBounds().getCentre());
@@ -1043,6 +1247,7 @@ void Panel::resized()
                     auto lab = r.removeFromTop (16);
                     auto kn = r.removeFromLeft (juce::jmin (64, r.getWidth() / 2));
                     k.label.setBounds (lab.withWidth (kn.getWidth() + 8).withX (kn.getX() - 4)); k.slider.setBounds (kn);
+                    if (auto& h = handles[(size_t) mi]) h->setBounds (kn.getRight() + 6, lab.getY() + 1, 14, 14);
                     macroInfo[(size_t) mi] = r.withTrimmedLeft (4).withTrimmedRight (6).withTrimmedTop (2).withTrimmedBottom (4);
                 }
                 else { k.label.setBounds (r.removeFromTop (16)); k.slider.setBounds (r); }
@@ -1097,6 +1302,107 @@ struct GestureCounter final : juce::AudioProcessorParameter::Listener
     void parameterValueChanged (int, float) override {}
     void parameterGestureChanged (int, bool starting) override { (starting ? begins : ends)++; }
 };
+}
+
+// 1.3.0: drag a macro grip onto knobs, the hover highlight, no duplicates, the ring / Alt-drag amount, right-click still there
+juce::String Panel::auditDragDrop()
+{
+    juce::String out; bool ok = true;
+    auto check = [&] (bool cond, const juce::String& what) { out << (cond ? "  ok   " : "  FAIL ") << what << "\n"; ok = ok && cond; };
+    auto src = juce::Desktop::getInstance().getMainMouseSource();
+    auto ev = [&] (juce::Component& c, juce::Point<float> localPt, juce::ModifierKeys mods)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (src, localPt, mods, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c, now, localPt, now, 1, false);
+    };
+    const juce::ModifierKeys left (juce::ModifierKeys::leftButtonModifier), alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+    auto* h = handles[0].get(); auto* tk = knobFor ("glide"); auto* mk = knobFor ("macro3");
+    check (h != nullptr && tk != nullptr && mk != nullptr && h->isVisible() && ! h->getBounds().isEmpty(), "macro grips exist and are laid out");
+    if (h == nullptr || tk == nullptr || mk == nullptr) return out + "DRAG AUDIT FAILED\n";
+    proc.clearMacro (0);
+    auto inH = [&] (juce::Component& over) { return h->getLocalPoint (&over, over.getLocalBounds().getCentre().toFloat()); };
+    auto amountOf = [&] { return proc.macroAmount (0, "glide"); };
+    auto count = [&] { return (int) proc.macroTargets (0).size(); };
+    const float glideVal = (float) tk->slider.getValue();
+    // 1) drag M1's grip over empty panel space, then over the Glide knob, release
+    h->mouseDown (ev (*h, h->getLocalBounds().getCentre().toFloat(), left));
+    h->mouseDrag (ev (*h, h->getLocalBounds().getCentre().toFloat() + juce::Point<float> (0.0f, -40.0f), left));
+    check (dropId.isEmpty() && (int) tk->slider.getProperties()["vvDrop"] == 0, "dragging over empty space: no drop target");
+    h->mouseDrag (ev (*h, inH (tk->slider), left));
+    check (dropId == "glide" && (int) tk->slider.getProperties()["vvDrop"] == 1, "hovering the Glide knob highlights it as the drop target");
+    h->mouseUp (ev (*h, inH (tk->slider), left));
+    check (count() == 1 && std::fabs (amountOf() - 0.5f) < 1e-6f && (int) tk->slider.getProperties()["vvDrop"] == 0, "drop: Glide becomes an M1 target at +50 %, highlight cleared");
+    check (std::fabs ((float) tk->slider.getValue() - glideVal) < 1e-6f, "the knob itself did not move");
+    check (tk->slider.getProperties()["vvMods"].isArray() && (int) tk->slider.getProperties()["vvFocus"] == 0, "the knob shows M1's amount ring");
+    // 2) drag again onto the same knob: highlighted as 'already assigned', no duplicate, amount unchanged
+    proc.assignMacro (0, "glide", 0.3f);
+    h->mouseDown (ev (*h, h->getLocalBounds().getCentre().toFloat(), left));
+    h->mouseDrag (ev (*h, inH (tk->slider), left));
+    check ((int) tk->slider.getProperties()["vvDrop"] == 2, "an already assigned knob shows the 'already on' highlight");
+    h->mouseUp (ev (*h, inH (tk->slider), left));
+    check (count() == 1 && std::fabs (amountOf() - 0.3f) < 1e-6f, "dropping on an assigned knob does not duplicate it or change its amount");
+    // 3) a drop on another macro knob is ignored; a plain click on the name does not assign anything
+    h->mouseDown (ev (*h, h->getLocalBounds().getCentre().toFloat(), left));
+    h->mouseDrag (ev (*h, inH (mk->slider), left));
+    check (dropId.isEmpty() && (int) mk->slider.getProperties()["vvDrop"] == 0, "a macro knob is not a drop target");
+    h->mouseUp (ev (*h, inH (mk->slider), left));
+    check (count() == 1, "dropping on a macro knob adds nothing");
+    if (auto* lab = &knobFor ("macro1")->label)
+    {
+        const auto c = lab->getLocalBounds().getCentre().toFloat();
+        h->mouseDown (ev (*lab, c, left)); h->mouseDrag (ev (*lab, c + juce::Point<float> (2.0f, 1.0f), left)); h->mouseUp (ev (*lab, c, left));
+        check (count() == 1 && ! dragLive && dragMacro < 0, "a click on the macro name (under 5 px of movement) is not a drag");
+        h->mouseDown (ev (*lab, c, left)); h->mouseDrag (ev (*lab, lab->getLocalPoint (&tk->slider, tk->slider.getLocalBounds().getCentre().toFloat()), left));
+        check (dropId == "glide", "the macro name drags too");
+        h->mouseUp (ev (*lab, lab->getLocalPoint (&tk->slider, tk->slider.getLocalBounds().getCentre().toFloat()), left));
+    }
+    // 4) Alt + drag on the knob: changes M1's amount, not the knob (150 px = 100 %)
+    const auto kc = tk->slider.getLocalBounds().getCentre().toFloat();
+    tk->slider.mouseDown (ev (tk->slider, kc, alt));
+    tk->slider.mouseDrag (ev (tk->slider, kc + juce::Point<float> (0.0f, -60.0f), alt));
+    tk->slider.mouseUp (ev (tk->slider, kc + juce::Point<float> (0.0f, -60.0f), alt));
+    check (std::fabs (amountOf() - 0.7f) < 0.011f && std::fabs ((float) tk->slider.getValue() - glideVal) < 1e-6f, "Alt + drag up 60 px: amount +30 % -> +70 %, knob unchanged (" + juce::String (amountOf(), 2) + ")");
+    // 5) a press on the ring itself (no modifier), drag down
+    const auto lay = tk->slider.getLookAndFeel().getSliderLayout (tk->slider);
+    const auto b = lay.sliderBounds.toFloat().reduced (6.0f);
+    const float r = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
+    const auto ringPt = b.getCentre() + juce::Point<float> (0.0f, -(r + 3.0f));
+    tk->slider.mouseDown (ev (tk->slider, ringPt, left));
+    tk->slider.mouseDrag (ev (tk->slider, ringPt + juce::Point<float> (0.0f, 75.0f), left));
+    tk->slider.mouseUp (ev (tk->slider, ringPt + juce::Point<float> (0.0f, 75.0f), left));
+    check (std::fabs (amountOf() - 0.2f) < 0.011f && std::fabs ((float) tk->slider.getValue() - glideVal) < 1e-6f, "dragging the ring down 75 px: +70 % -> +20 %, knob unchanged (" + juce::String (amountOf(), 2) + ")");
+    // 6) a normal press in the middle of the knob still turns the knob
+    tk->slider.mouseDown (ev (tk->slider, kc, left));
+    tk->slider.mouseDrag (ev (tk->slider, kc + juce::Point<float> (0.0f, -40.0f), left));
+    tk->slider.mouseUp (ev (tk->slider, kc + juce::Point<float> (0.0f, -40.0f), left));
+    check ((float) tk->slider.getValue() > glideVal && std::fabs (amountOf() - 0.2f) < 0.011f, "a plain drag in the middle still turns the knob, the amount stays");
+    tk->slider.setValue (glideVal, juce::sendNotificationSync);
+    // 7) a knob with no macro: Alt + drag is a normal knob drag
+    if (auto* other = knobFor ("dlyTime"))
+    {
+        bool none = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) none &= proc.macroAmount (m, "dlyTime") == 0.0f && [&] { for (auto& t : proc.macroTargets (m)) if (t.id == "dlyTime") return false; return true; }();
+        if (none) { other->slider.mouseDown (ev (other->slider, other->slider.getLocalBounds().getCentre().toFloat(), alt)); check (! other->slider.modDragging, "a knob without macros ignores the ring / Alt gesture"); other->slider.mouseUp (ev (other->slider, other->slider.getLocalBounds().getCentre().toFloat(), alt)); }
+    }
+    // 8) a full macro refuses a 9th drop
+    const char* fill[] = { "cutoff", "reso", "drive", "noise", "vox", "width", "detune" };
+    for (auto* id : fill) proc.assignMacro (0, id, 0.1f);
+    if (auto* k9 = knobFor ("pwm"))
+    {
+        h->mouseDown (ev (*h, h->getLocalBounds().getCentre().toFloat(), left)); h->mouseDrag (ev (*h, inH (k9->slider), left)); h->mouseUp (ev (*h, inH (k9->slider), left));
+        check (count() == VvitchProcessor::kMaxTargets && proc.macroAmount (0, "pwm") == 0.0f && footerNote.contains ("full"), "a full macro (8 targets) refuses another drop");
+    }
+    // 9) right-click assign is still there
+    {
+        popup.dismiss();
+        auto e = ev (tk->slider, kc, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier));
+        tk->slider.mouseDown (e); tk->slider.mouseUp (e);
+        check (popup.isOpen() && popup.itemTexts().joinIntoString ("|").contains ("Assign to &macro"), "right-click on a knob still offers Assign to macro");
+        popup.dismiss();
+    }
+    proc.restoreDefaultMacro (0); refreshModRings();
+    check (proc.macroIsDefault (0), "restore brings back the preset's own M1");
+    out << (ok ? "DRAG AUDIT OK\n" : "DRAG AUDIT FAILED\n");
+    return out;
 }
 
 juce::String Panel::auditMenus()

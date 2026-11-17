@@ -4,6 +4,8 @@ Free witch house polysynth by CMPLXTY: glassy detuned saws, chip-crushed leads, 
 reverb. It is inspired by the sound of witch house and early-2010s dark electronic acts (Crystal Castles and friends) but is its own
 design and not a clone of any product. Instrument plug-in: MIDI in, stereo out, zero latency.
 
+**1.3.0:** Every factory preset now has its own eight macros, named for what they do in that sound (for example BITE, CRUSH, SPACE, VIBRATO on Glass Coffin, or GLASS, DECAY, HAUNT on Cursed Music Box). Each macro moves 2 to 6 knobs by amounts tuned to the preset, so a full sweep is a real change but never clips, goes silent or jumps more than about 4 dB. With the macros at 0 every preset sounds exactly as in 1.2.0. **Drag and drop like Serum:** grab the small grip next to a macro's name (or the name itself) and drop it on any knob; the knob lights up while you hover and is added at +50%. Dropping on a knob that is already a target does nothing (no duplicates). Each target knob shows a ring arc for the amount; drag the ring, or Alt + drag the knob, to change it (Shift for fine). Right-click assignment still works, and **Restore preset targets** brings a macro back to the preset's own setup. Your user presets and older projects keep their own macros.
+
 **1.2.0:** The eight macros are now assignable. Right-click a macro for **Assign: click knobs...** (then click any knobs; each is added at +50%), its target list (click a target to set its amount from -100% to +100% or remove it), **Clear all targets** and **Restore stock targets**. Or right-click any knob for **Assign to macro...**. A macro can drive up to 8 knobs, and one knob can sit on several macros (they add up). The targets are listed next to each macro and small **M** tags mark the knobs a macro moves. The map is saved with your presets and with the project. Factory presets and presets/projects from 1.1.x use the stock targets, so they sound exactly as before. The macros stay automatable.
 
 **1.1.1:** Tape Age hiss now follows the sound and goes to true silence when you are not playing. The Age colour is still there on notes and tails. Factory presets such as Pale Static and Tape Funeral no longer leave a constant background hiss on an unused track.
@@ -81,6 +83,6 @@ scripts/build-macos-pkg.sh                                    # macOS
   processBlock, sample-accurate note start, bend, CC1 / CC64 / CC120 / CC123, the voice count, mono output, every preset value naming a
   real parameter in range, **every factory preset playing a chord at 44.1 / 48 / 96 kHz (finite, peak <= 0.95, audible)**, user presets and
   state round trips.
-- Validated with pluginval (strictness 5) and clap-validator on Linux.
+- Validated with pluginval (strictness 10) and clap-validator on Linux.
 
 Font: UnifrakturMaguntia (SIL Open Font License 1.1). Code: GPLv3.

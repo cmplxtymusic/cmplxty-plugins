@@ -10,6 +10,8 @@ namespace vv
 {
 struct FactoryPreset { const char* name; const char* category; std::vector<std::pair<const char*, float>> values; };
 const std::vector<FactoryPreset>& factoryPresets();
+// 1.3.0: each factory preset's own macros, "NAME>id:amount,...|..." (8 groups); "" = the stock macros (FactoryMacros.cpp)
+const char* factoryMacroSpec (const char* presetName);
 
 class PresetManager
 {
@@ -17,6 +19,7 @@ public:
     static constexpr const char* kExt = ".cmplxtypreset";
     std::function<void (juce::XmlElement&)> saveExtra;            // optional: extra non-parameter data (e.g. sample kits)
     std::function<void (const juce::XmlElement*)> loadExtra;
+    std::function<void (int factoryIndex)> loadFactoryExtra;      // factory preset loaded (when unset: loadExtra (nullptr))
 
     PresetManager (juce::AudioProcessorValueTreeState& s, juce::UndoManager* um, juce::String pluginName)
         : apvts (s), undo (um), plugin (std::move (pluginName)) {}
@@ -46,7 +49,7 @@ public:
                 auto it = m.find (r->getParameterID());
                 set (*r, it != m.end() ? r->convertTo0to1 (it->second) : r->getDefaultValue());
             }
-        if (loadExtra) loadExtra (nullptr);
+        if (loadFactoryExtra) loadFactoryExtra (i); else if (loadExtra) loadExtra (nullptr);
         finishLoad (f[(size_t) i].name);
         return true;
     }

@@ -157,12 +157,32 @@ float VvitchProcessor::macroAmount (int m, const juce::String& id) const
     for (auto& t : mapEdit[(size_t) m]) if (t.id == id) return t.amount;
     return 0.0f;
 }
+static float cleanAmount (float a);
+std::vector<VvitchProcessor::MacroTarget> VvitchProcessor::defaultTargets (int m) const
+{
+    std::vector<MacroTarget> v;
+    if (m < 0 || m >= kMacros) return v;
+    if (presetSpec.isNotEmpty())
+    {
+        const auto groups = juce::StringArray::fromTokens (presetSpec, "|", "");
+        const auto body = groups[m].fromFirstOccurrenceOf (">", false, false);
+        for (auto& item : juce::StringArray::fromTokens (body, ",", ""))
+        {
+            const auto id = item.upToFirstOccurrenceOf (":", false, false).trim();
+            if (id.isNotEmpty() && isAssignable (id) && (int) v.size() < kMaxTargets && std::none_of (v.begin(), v.end(), [&] (const MacroTarget& t) { return t.id == id; }))
+                v.push_back ({ id, cleanAmount (item.fromFirstOccurrenceOf (":", false, false).getFloatValue()) });
+        }
+        return v;
+    }
+    for (auto& t : stockTargets (m)) v.push_back ({ kParams[t.param].id, t.depth });
+    return v;
+}
 bool VvitchProcessor::macroIsDefault (int m) const
 {
     if (m < 0 || m >= kMacros) return true;
-    const auto& st = stockTargets (m); const auto& cur = mapEdit[(size_t) m];
+    const auto st = defaultTargets (m); const auto& cur = mapEdit[(size_t) m];
     if (st.size() != cur.size()) return false;
-    for (size_t k = 0; k < st.size(); ++k) if (cur[k].id != kParams[st[k].param].id || cur[k].amount != st[k].depth) return false;
+    for (size_t k = 0; k < st.size(); ++k) if (cur[k].id != st[k].id || cur[k].amount != st[k].amount) return false;
     return true;
 }
 static float cleanAmount (float a) { return std::isfinite (a) ? juce::jlimit (-1.0f, 1.0f, a) : 0.0f; }
@@ -185,9 +205,23 @@ void VvitchProcessor::clearMacro (int m) { if (m >= 0 && m < kMacros) { mapEdit[
 void VvitchProcessor::restoreDefaultMacro (int m)
 {
     if (m < 0 || m >= kMacros) return;
-    auto& v = mapEdit[(size_t) m]; v.clear();
-    for (auto& t : stockTargets (m)) v.push_back ({ kParams[t.param].id, t.depth });
+    mapEdit[(size_t) m] = defaultTargets (m);
     publishMap();
+}
+void VvitchProcessor::applyMacroSpec (const juce::String& spec)
+{
+    presetSpec = spec.trim();
+    const auto groups = juce::StringArray::fromTokens (presetSpec, "|", "");
+    juce::StringArray names, maps;
+    for (int m = 0; m < kMacros; ++m)
+    {
+        const auto g = presetSpec.isNotEmpty() ? groups[m] : juce::String();
+        const auto nm = g.upToFirstOccurrenceOf (">", false, false).removeCharacters ("|").trim().substring (0, 16);
+        names.add (nm.isNotEmpty() && g.containsChar ('>') ? nm : juce::String (defaultMacroName (m)));
+        maps.add (g.fromFirstOccurrenceOf (">", false, false));
+    }
+    apvts.state.setProperty ("macroNames", names.joinIntoString ("|"), nullptr);
+    setMacroMapString (presetSpec.isNotEmpty() ? maps.joinIntoString ("|") : juce::String());
 }
 juce::String VvitchProcessor::macroMapString() const
 {
@@ -250,8 +284,11 @@ VvitchProcessor::VvitchProcessor()
     // macro names travel with user presets; a factory preset (nullptr) restores the default names
     presets.saveExtra = [this] (juce::XmlElement& x) { for (int m = 0; m < kMacros; ++m) x.setAttribute ("macro" + juce::String (m + 1), macroName (m));
                                                        x.setAttribute ("macroMap", macroMapString()); };
+    // 1.3.0: a factory preset brings its own macro names and targets (Init: the stock ones)
+    presets.loadFactoryExtra = [this] (int i) { applyMacroSpec (vv::factoryMacroSpec (vv::factoryPresets()[(size_t) i].name)); };
     presets.loadExtra = [this] (const juce::XmlElement* x)
     {
+        presetSpec = {};   // user preset: "restore" means the stock targets
         juce::StringArray parts;
         for (int m = 0; m < kMacros; ++m) parts.add (x != nullptr ? x->getStringAttribute ("macro" + juce::String (m + 1), defaultMacroName (m)) : juce::String (defaultMacroName (m)));
         apvts.state.setProperty ("macroNames", parts.joinIntoString ("|"), nullptr);
@@ -260,7 +297,7 @@ VvitchProcessor::VvitchProcessor()
     };
     for (auto& a : mapParam) a.store (-1);
     for (auto& a : mapAmount) a.store (0.0f);
-    setMacroMapString ({});
+    applyMacroSpec (vv::factoryMacroSpec ("Init"));   // 1.3.0: a new instance starts on Init with its own macros
 }
 
 float VvitchProcessor::mval (int i, const float* offsets) const
@@ -391,6 +428,10 @@ void VvitchProcessor::setStateInformation (const void* data, int size)
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
     setMacroMapString (apvts.state.getProperty ("macroMap").toString());   // 1.1.x sessions have none: the stock targets
+    // 1.3.0: remember which factory preset the session is on, so "restore preset targets" works; the saved map itself is kept as is
+    presetSpec = {};
+    if (! (bool) apvts.state.getProperty ("presetUser", false))
+        for (auto& f : vv::factoryPresets()) if (presets.currentName() == f.name) { presetSpec = juce::String (vv::factoryMacroSpec (f.name)).trim(); break; }
 }
 
 juce::AudioProcessorEditor* VvitchProcessor::createEditor() { return new VvitchEditor (*this); }

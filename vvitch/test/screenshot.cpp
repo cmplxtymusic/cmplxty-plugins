@@ -3,6 +3,7 @@
 #include "PluginEditor.h"
 #include <random>
 #include <cmath>
+#include <cstring>
 
 // 1.2.0: counts heap allocations made on a thread while it is flagged (the audio-thread check for the macro map)
 static thread_local bool gCountAllocs = false;
@@ -184,24 +185,44 @@ int procTests()
         {
             proc.presets.loadFactory (i);
             const auto a = proc.currentParams(); const float storedCut = v (proc, "cutoff");
-            set (proc, "macro1", 1.0f); set (proc, "macro2", 1.0f); set (proc, "macro7", 1.0f);
-            const auto b = proc.currentParams();
-            if ((b.cutoff > a.cutoff || a.cutoff >= 19999.0f) && b.revMix > a.revMix - 1e-6f && b.width >= a.width && (b.revMix > a.revMix || a.revMix >= 0.999f) && std::fabs (v (proc, "cutoff") - storedCut) < 1e-3f) ++moved;
+            auto sameP = [] (const vv::dsp::Params& a, const vv::dsp::Params& b)
+            {
+                for (size_t k = 0; k < a.fx.size(); ++k) if (a.fx[k].type != b.fx[k].type || a.fx[k].a != b.fx[k].a || a.fx[k].b != b.fx[k].b || a.fx[k].mix != b.fx[k].mix) return false;
+                return a.w1 == b.w1 && a.w2 == b.w2 && a.oct1 == b.oct1 && a.semi2 == b.semi2 && a.fine2 == b.fine2 && a.lvl1 == b.lvl1 && a.lvl2 == b.lvl2 && a.pw == b.pw && a.pwm == b.pwm && a.pwmRate == b.pwmRate && a.uni == b.uni && a.detune == b.detune && a.width == b.width && a.noise == b.noise && a.noiseTone == b.noiseTone && a.vox == b.vox && a.vowel == b.vowel && a.voxMove == b.voxMove && a.fType == b.fType && a.cutoff == b.cutoff && a.reso == b.reso && a.drive == b.drive && a.fEnv == b.fEnv && a.fKey == b.fKey && a.fA == b.fA && a.fD == b.fD && a.fS == b.fS && a.aA == b.aA && a.aD == b.aD && a.aS == b.aS && a.aR == b.aR && a.drop == b.drop && a.dropTime == b.dropTime && a.drag == b.drag && a.dragAmt == b.dragAmt && a.wow == b.wow && a.flutter == b.flutter && a.age == b.age && a.bits == b.bits && a.crushHz == b.crushHz && a.chipMix == b.chipMix && a.lfoShape == b.lfoShape && a.lfoRate == b.lfoRate && a.lfoCut == b.lfoCut && a.lfoPitch == b.lfoPitch && a.arp == b.arp && a.arpMode == b.arpMode && a.arpDiv == b.arpDiv && a.arpOct == b.arpOct && a.arpGate == b.arpGate && a.voices == b.voices && a.glide == b.glide && a.bpm == b.bpm && a.dlyTime == b.dlyTime && a.dlyFb == b.dlyFb && a.dlyMix == b.dlyMix && a.revSize == b.revSize && a.revMix == b.revMix && a.revDark == b.revDark && a.volumeDb == b.volumeDb && a.bendRange == b.bendRange;
+            };
+            // 1.3.0: every preset has its own eight macros; each one at full must move the engine, the stored knobs never change
+            int ok8 = 0;
+            for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+            {
+                const auto t = proc.macroTargets (m);
+                set (proc, ("macro" + juce::String (m + 1)).toRawUTF8(), 1.0f);
+                const auto b = proc.currentParams();
+                const bool movedAny = ! sameP (a, b);
+                set (proc, ("macro" + juce::String (m + 1)).toRawUTF8(), 0.0f);
+                const auto c = proc.currentParams();
+                ok8 += (movedAny && t.size() >= 2 && t.size() <= 6 && sameP (a, c)) ? 1 : 0;
+            }
+            if (ok8 == VvitchProcessor::kMacros && std::fabs (v (proc, "cutoff") - storedCut) < 1e-3f) ++moved;
         }
-        check (moved == n, "macros BRIGHT / SPACE / WIDTH push every factory preset, stored values unchanged");
+        check (moved == n, "every factory preset: all 8 macros (2-6 targets each) move the sound at full and return exactly at 0, stored values unchanged");
         proc.presets.loadFactory (1);
         check (v (proc, "macro1") == 0.0f, "loading a preset resets the macro knobs");
-        set (proc, "macro5", 1.0f); check (std::fabs (proc.currentParams().drop - (v (proc, "drop") - 12.0f)) < 0.2f, "macro DROP: -12 st at full");
+        proc.setMacroMapString ({});   // the 1.1.x stock map
+        set (proc, "macro5", 1.0f); check (std::fabs (proc.currentParams().drop - (v (proc, "drop") - 12.0f)) < 0.2f, "stock macro DROP: -12 st at full");
         set (proc, "macro5", 0.0f);
         // names: editable, in the session state, in user presets; factory presets restore the defaults
-        check (proc.macroName (0) == "BRIGHT" && proc.macroName (7) == "FX", "default macro names");
+        const auto initSpec = juce::StringArray::fromTokens (vv::factoryMacroSpec ("Init"), "|", "");
+        auto specName = [] (const char* preset, int m) { return juce::StringArray::fromTokens (vv::factoryMacroSpec (preset), "|", "")[m].upToFirstOccurrenceOf (">", false, false); };
+        check (initSpec.size() == 8 && proc.macroName (0) == specName (vv::factoryPresets()[1].name, 0) && proc.macroName (7) == specName (vv::factoryPresets()[1].name, 7), ("preset 1 brings its own macro names (" + proc.macroName (0) + " ... " + proc.macroName (7) + ")").toRawUTF8());
+        { VvitchProcessor fresh; check (fresh.macroName (0) == specName ("Init", 0) && fresh.macroName (7) == specName ("Init", 7), ("a new instance has Init's own macro names (" + fresh.macroName (0) + " ... " + fresh.macroName (7) + ")").toRawUTF8()); }
+        check (juce::String (VvitchProcessor::defaultMacroName (0)) == "BRIGHT" && juce::String (VvitchProcessor::defaultMacroName (7)) == "FX", "the 1.1.x stock names stay the fallback for older sessions / presets");
         proc.setMacroName (0, "Shine|x"); check (proc.macroName (0) == "Shinex", "rename a macro ('|' stripped)");
         juce::MemoryBlock mb; proc.getStateInformation (mb);
         VvitchProcessor p2; p2.setStateInformation (mb.getData(), (int) mb.getSize());
-        check (p2.macroName (0) == "Shinex" && p2.macroName (1) == "SPACE", "macro names survive the session state");
+        check (p2.macroName (0) == "Shinex" && p2.macroName (1) == specName (vv::factoryPresets()[1].name, 1), "macro names survive the session state");
         auto f = juce::File::createTempFile (".cmplxtypreset");
         proc.presets.saveFile (f, "macro test"); proc.presets.loadFactory (2);
-        check (proc.macroName (0) == "BRIGHT", "a factory preset restores the default names");
+        check (proc.macroName (0) == specName (vv::factoryPresets()[2].name, 0) && proc.macroName (0).isNotEmpty() && proc.macroName (0) != "Shinex", ("a factory preset brings its own macro names (" + proc.macroName (0) + ")").toRawUTF8());
         proc.presets.loadFile (f); check (proc.macroName (0) == "Shinex", "a user preset carries its macro names");
         f.deleteFile();
     }
@@ -209,10 +230,11 @@ int procTests()
     {   // 1.2.0: macro assignment
         VvitchProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         auto ids = [&] (int m) { juce::StringArray a; for (auto& t : proc.macroTargets (m)) a.add (t.id + ":" + juce::String (t.amount, 2)); return a.joinIntoString (","); };
-        check (ids (0) == "cutoff:0.35,reso:0.20" && ids (3) == "chipMix:0.80,bits:-0.60,crushHz:-0.50" && ids (7) == "fx1Mix:0.60,fx2Mix:0.60,fx3Mix:0.60,fx4Mix:0.60",
-               "default map = the 1.1.x stock targets (BRIGHT, CRUSH, FX ...)");
         bool allDefault = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) allDefault &= proc.macroIsDefault (m);
-        check (allDefault, "every macro starts on its stock targets");
+        check (allDefault && proc.presetMacroSpec() == juce::String (vv::factoryMacroSpec ("Init")), "a new instance starts on Init's own macro targets");
+        proc.setMacroMapString ({});
+        check (ids (0) == "cutoff:0.35,reso:0.20" && ids (3) == "chipMix:0.80,bits:-0.60,crushHz:-0.50" && ids (7) == "fx1Mix:0.60,fx2Mix:0.60,fx3Mix:0.60,fx4Mix:0.60",
+               "an empty map = the 1.1.x stock targets (BRIGHT, CRUSH, FX ...)");
         // reassign: M2 (SPACE) -> cutoff -100 %, reso +40 %, plus up to 8 targets
         proc.presets.loadFactory (1);
         proc.clearMacro (1);
@@ -240,7 +262,15 @@ int procTests()
         auto f = juce::File::createTempFile (".cmplxtypreset");
         proc.presets.saveFile (f, "map test");
         proc.presets.loadFactory (3); bool stock = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) stock &= proc.macroIsDefault (m);
-        check (stock, "a factory preset loads with the stock macro targets");
+        check (stock && proc.presetMacroSpec().isNotEmpty() && proc.macroTargets (0).size() >= 2 && ids (0) != "cutoff:0.35,reso:0.20", ("a factory preset loads with its own macro targets (M1 " + ids (0) + ")").toRawUTF8());
+        proc.clearMacro (2); check (! proc.macroIsDefault (2), "edited macro is no longer the preset's");
+        proc.restoreDefaultMacro (2); check (proc.macroIsDefault (2) && proc.macroTargets (2).size() >= 2, "restore brings back the preset's own targets");
+        {   // a session saved on a factory preset keeps its saved map, and still knows the preset for 'restore'
+            proc.clearMacro (4); juce::MemoryBlock ms; proc.getStateInformation (ms);
+            VvitchProcessor p4; p4.setStateInformation (ms.getData(), (int) ms.getSize());
+            check (p4.macroTargets (4).empty() && p4.presetMacroSpec() == proc.presetMacroSpec(), "a session keeps its own map (edits included) and its preset's targets for restore");
+            proc.restoreDefaultMacro (4);
+        }
         proc.presets.loadFile (f); check (std::fabs (proc.macroAmount (1, "cutoff") + 1.0f) < 1e-6f && (int) proc.macroTargets (1).size() == 7, "a user preset carries its macro map");
         auto x = juce::XmlDocument::parse (f); x->getChildByName ("EXTRA")->removeAttribute ("macroMap"); x->writeTo (f);
         proc.presets.loadFile (f); stock = true; for (int m = 0; m < VvitchProcessor::kMacros; ++m) stock &= proc.macroIsDefault (m);
@@ -252,7 +282,8 @@ int procTests()
             auto xml = juce::AudioProcessor::getXmlFromBinary (m3.getData(), (int) m3.getSize()); xml->removeAttribute ("macroMap");
             juce::MemoryBlock old; juce::AudioProcessor::copyXmlToBinary (*xml, old);
             p3.setStateInformation (old.getData(), (int) old.getSize());
-            check (p3.macroIsDefault (0), "a 1.1.x session (no map) restores the stock macro targets");
+            juce::StringArray a0; for (auto& t : p3.macroTargets (0)) a0.add (t.id + ":" + juce::String (t.amount, 2));
+            check (a0.joinIntoString (",") == "cutoff:0.35,reso:0.20" && p3.macroName (0) == "BRIGHT", "a 1.1.x session (no map, no names) gets the stock macro targets and names, so it sounds as before");
         }
         // audio thread: no allocation while macros move and the map is edited between blocks
         proc.presets.loadFactory (10);
@@ -368,6 +399,58 @@ int main (int argc, char** argv)
         return 0;
     }
 #endif
+#ifdef VV_HAS_PRESET_MACROS
+    if (mode == "macrotest")   // 1.3.0: one factory preset (argv[3]), every macro: static renders at 0/.25/.5/.75/1 and a 0 -> 1 ramp; raw float32 to `out`
+    {
+        const int pi = argc > 3 ? std::atoi (argv[3]) : 0;
+        juce::StringPairArray over;   // VV_SPEC_FILE: "name<TAB>spec" lines that override the compiled-in specs (tuning)
+        if (auto* sf = std::getenv ("VV_SPEC_FILE"))
+            for (auto& line : juce::StringArray::fromLines (juce::File (juce::String (sf)).loadFileAsString()))
+                if (line.containsChar ('\t')) over.set (line.upToFirstOccurrenceOf ("\t", false, false), line.fromFirstOccurrenceOf ("\t", false, false));
+        const auto& fp = vv::factoryPresets()[(size_t) pi];
+        juce::FileOutputStream os (juce::File::getCurrentWorkingDirectory().getChildFile (out));
+        os.setPosition (0); os.truncate();
+        double sec = 0, audio = 0;
+        auto make = [&] (std::unique_ptr<VvitchProcessor>& p)
+        {
+            p = std::make_unique<VvitchProcessor>(); p->setPlayConfigDetails (0, 2, 48000.0, 480); p->prepareToPlay (48000.0, 480); p->presets.loadFactory (pi);
+            if (over.containsKey (fp.name)) p->applyMacroSpec (over[fp.name]);
+        };
+        auto run = [&] (VvitchProcessor& p, int blocks, int offAt, std::function<void (int)> perBlock)
+        {
+            juce::AudioBuffer<float> b (2, 480);
+            for (int blk = 0; blk < blocks; ++blk)
+            {
+                juce::MidiBuffer m;
+                if (blk == 0) for (int nt : { 48, 55, 63 }) m.addEvent (juce::MidiMessage::noteOn (1, nt, 0.85f), 7);
+                if (blk == offAt) for (int nt : { 48, 55, 63 }) m.addEvent (juce::MidiMessage::noteOff (1, nt), 0);
+                if (perBlock) perBlock (blk);
+                b.clear(); const auto t0 = juce::Time::getHighResolutionTicks(); p.processBlock (b, m); sec += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                for (int k = 0; k < 480; ++k) { os.writeFloat (b.getSample (0, k)); os.writeFloat (b.getSample (1, k)); }
+            }
+            audio += blocks * 0.01;
+        };
+        auto setM = [] (VvitchProcessor& p, int m, float v) { p.apvts.getParameter ("macro" + juce::String (m + 1))->setValueNotifyingHost (v); };
+        std::unique_ptr<VvitchProcessor> p;
+        make (p); std::printf ("PRESET %d\t%s\n", pi, fp.name);
+        for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+        {
+            juce::StringArray t; for (auto& x : p->macroTargets (m)) t.add (x.id + ":" + juce::String (x.amount, 3));
+            std::printf ("MACRO %d\t%s\t%s\n", m + 1, p->macroName (m).toRawUTF8(), t.joinIntoString (",").toRawUTF8());
+        }
+        run (*p, 250, 150, {});                                       // static, macros at 0
+        for (int m = 0; m < VvitchProcessor::kMacros; ++m)
+            for (float v : { 0.25f, 0.5f, 0.75f, 1.0f }) { make (p); setM (*p, m, v); run (*p, 250, 150, {}); }
+        for (int m = 0; m <= VvitchProcessor::kMacros + 1; ++m)       // ramps (m == 8: all eight together, m == 9: none = the reference), chord held
+        {
+            make (p);
+            run (*p, 900, -1, [&] (int blk) { const float v = juce::jlimit (0.0f, 1.0f, (blk - 50) / 800.0f);
+                                              for (int k = 0; k < VvitchProcessor::kMacros; ++k) if (k == m || m == VvitchProcessor::kMacros) setM (*p, k, v); });
+        }
+        std::printf ("CPU %.6f\n", sec / audio * 100.0);
+        return 0;
+    }
+#endif
     if (mode == "params")
     {
         int bad = 0;
@@ -391,6 +474,10 @@ int main (int argc, char** argv)
         auto r = e->getPanel().auditKeyboard(); std::printf ("%s", r.toRawUTF8());
         auto m = e->getPanel().auditMenus();    std::printf ("%s", m.toRawUTF8());
         auto p = e->getPanel().auditPresets();  std::printf ("%s", p.toRawUTF8());
+       #ifdef VV_HAS_PRESET_MACROS
+        auto d = e->getPanel().auditDragDrop(); std::printf ("%s", d.toRawUTF8());
+        if (! d.contains ("DRAG AUDIT OK")) p = "PRESET AUDIT FAILED";
+       #endif
         proc.undoManager.clearUndoHistory(); proc.presets.loadFactory (4);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
         const bool undoOk = proc.undoManager.canUndo();
@@ -401,6 +488,9 @@ int main (int argc, char** argv)
     if (mode != "empty") vvui::demoDisplay (e->getPanel().display());
     if (mode == "menu") e->getPanel().demoKnobMenu();
     if (mode == "presets") e->getPanel().demoPresetMenu();
+   #ifdef VV_HAS_PRESET_MACROS
+    if (mode == "drag") { proc.presets.loadFactory (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (200); e->getPanel().demoDrag (0, "glide"); }
+   #endif
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     juce::File f (juce::File::getCurrentWorkingDirectory().getChildFile (out));

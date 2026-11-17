@@ -3,6 +3,7 @@
 #include "VvitchDSP.h"
 #include "PresetManager.h"
 #define VV_HAS_MACRO_MAP 1   // 1.2.0 (the tests check for it)
+#define VV_HAS_PRESET_MACROS 1   // 1.3.0
 
 // CMPLXTY VVITCH: dark polysynth for witch house: detuned saw / square / PWM oscillators with unison, noise, a choral vox formant
 // stage, a driven filter, pitch drop and DRAG, arp and glide, CHIP crush, TAPE wow, dark delay and reverb. MIDI in, stereo out.
@@ -66,6 +67,12 @@ public:
     bool macroIsDefault (int m) const;
     juce::String macroMapString() const;                              // "id:amount,id:amount|...|..." (8 groups)
     void setMacroMapString (const juce::String&);                     // empty = the 1.1.x stock map
+    // 1.3.0 per-preset macros. A spec is 8 groups "NAME>id:amount,id:amount" joined by '|'. Every factory preset carries its own
+    // (vv::factoryMacroSpec); loading one sets the names and the map. "Restore preset targets" goes back to the loaded factory
+    // preset's own targets (the stock ones for Init, user presets and older sessions). Macros at 0 never change the sound.
+    void applyMacroSpec (const juce::String& spec);
+    const juce::String& presetMacroSpec() const noexcept { return presetSpec; }
+    std::vector<MacroTarget> defaultTargets (int m) const;           // what "restore" brings back for macro m
     // on-screen keyboard / tests: queued notes, played on the audio thread at the next block
     void queueNote (int note, float vel) { uiMidi.push (note, vel); }
 
@@ -85,6 +92,7 @@ private:
     std::array<std::atomic<float>, kMacros * kMaxTargets> mapAmount;
     std::array<std::vector<MacroTarget>, kMacros> mapEdit;          // message-thread copy
     void publishMap();
+    juce::String presetSpec;                                          // the loaded factory preset's macro spec ("" = stock)
     int paramIndex (const juce::String& id) const;
     float val (int i) const { return raw[(size_t) i]->load (std::memory_order_relaxed); }
     void handleMidi (const juce::MidiMessage&);
