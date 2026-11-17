@@ -2,6 +2,8 @@
 // Click a pad to play it; right-click for Load sample / Clear sample; drop an audio file on a pad to load it.
 // 1.1.0: pattern strip under the pads - host tempo, the clip (pattern + fill) as a GM note grid with a playhead, and drag-out chips:
 // MIDI (.mid with GM / FPC notes and the tempo) and audio loops (full / kick / snare / top / toms, 24-bit WAV, whole bars).
+// 1.2.0: PLAY / STOP previews the loop through the plug-in (no host transport needed); click a loop chip to hear just that part,
+// drag it to export it. WITH HOST plays the pattern locked to the host's song position while the host runs.
 #include "PluginEditor.h"
 
 namespace cwui
@@ -20,9 +22,9 @@ const PanelSpec& panelSpec()
             { "PAD 6", nullptr, { 554, 612, 530, 118 }, { { 'k', "p6Tune", "TUNE" }, { 'k', "p6Decay", "DECAY" }, { 'k', "p6Pan", "PAN" }, { 'k', "p6Level", "LEVEL" }, { 'c', "p6Sound", "SOUND" }, { 'c', "p6Choke", "CHOKE" } }, 130 },
             { "PAD 7", nullptr, { 16, 736, 530, 118 }, { { 'k', "p7Tune", "TUNE" }, { 'k', "p7Decay", "DECAY" }, { 'k', "p7Pan", "PAN" }, { 'k', "p7Level", "LEVEL" }, { 'c', "p7Sound", "SOUND" }, { 'c', "p7Choke", "CHOKE" } }, 130 },
             { "PAD 8", nullptr, { 554, 736, 530, 118 }, { { 'k', "p8Tune", "TUNE" }, { 'k', "p8Decay", "DECAY" }, { 'k', "p8Pan", "PAN" }, { 'k', "p8Level", "LEVEL" }, { 'c', "p8Sound", "SOUND" }, { 'c', "p8Choke", "CHOKE" } }, 130 },
-            { "MASTER", nullptr, { 16, 860, 1068, 118 }, { { 'k', "volume", "VOLUME" }, { 'k', "velSens", "VELOCITY" }, { 'k', "kitTune", "KIT TUNE" }, { 'c', "noteMap", "NOTE MAP" }, { 'c', "baseNote", "PAD 1 NOTE (CHROMATIC)" } }, 160 },
-            { "PATTERN", nullptr, { 16, 984, 530, 118 }, { { 'k', "fillSeed", "FILL VARIATION" }, { 'c', "pattern", "PATTERN" }, { 'c', "fillStyle", "FILL" } }, 220 },
-            { "LOOP", nullptr, { 554, 984, 530, 118 }, { { 'c', "fillLen", "FILL LENGTH" }, { 'c', "dragLen", "LOOP LENGTH" }, { 't', "patPlay", "PLAY IN PLUGIN" } }, 220 },
+            { "MASTER", nullptr, { 16, 860, 1068, 118 }, { { 'k', "volume", "VOLUME" }, { 'k', "velSens", "VELOCITY" }, { 'k', "kitTune", "KIT TUNE" }, { 'c', "noteMap", "NOTE MAP" }, { 'c', "baseNote", "PAD 1 NOTE (CHROMATIC)" }, { 't', "softClip", "SOFT CLIP" } }, 330 },
+            { "PATTERN", nullptr, { 16, 984, 530, 118 }, { { 'k', "swing", "SWING" }, { 'k', "fillSeed", "FILL VARIATION" }, { 'c', "pattern", "PATTERN" }, { 'c', "fillStyle", "FILL" } }, 220 },
+            { "LOOP", nullptr, { 554, 984, 530, 118 }, { { 'k', "bpm", "TEMPO (HOST / BPM)" }, { 'c', "fillLen", "FILL LENGTH" }, { 'c', "dragLen", "LOOP LENGTH" } }, 220 },
         },
         "p1Tune"
     };
@@ -94,9 +96,13 @@ public:
 
     // ---- pattern strip
     juce::Rectangle<int> stripBounds() const { auto r = getLocalBounds().reduced (10, 10); return r.removeFromBottom (120); }
-    juce::Rectangle<int> infoBounds() const { return stripBounds().removeFromLeft (190); }
+    // 1.2.0: transport block on the left (PLAY / STOP preview + WITH HOST), then the info, the note grid and the drag chips
+    juce::Rectangle<int> transportBounds() const { return stripBounds().reduced (6).removeFromLeft (124); }
+    juce::Rectangle<int> playBounds() const { auto r = transportBounds(); return r.removeFromTop (r.getHeight() - 30); }
+    juce::Rectangle<int> syncBounds() const { auto r = transportBounds(); return r.removeFromBottom (26); }
+    juce::Rectangle<int> infoBounds() const { auto r = stripBounds(); r.removeFromLeft (134); return r.removeFromLeft (178); }
     juce::Rectangle<int> chipArea() const { return stripBounds().removeFromRight (330); }
-    juce::Rectangle<int> gridBounds() const { auto r = stripBounds(); r.removeFromLeft (198); r.removeFromRight (338); return r; }
+    juce::Rectangle<int> gridBounds() const { auto r = stripBounds(); r.removeFromLeft (134 + 184); r.removeFromRight (338); return r; }
     // chip 0 = MIDI, 1 + part = audio parts, kChips - 1 = NEW FILL (click)
     static constexpr int kChips = 1 + DrumPlayerProcessor::kNumParts + 1;
     juce::Rectangle<int> chipBounds (int c) const
@@ -117,11 +123,13 @@ public:
         auto info = infoBounds().toFloat();
         g.setColour (juce::Colour (0xff161616)); g.fillRoundedRectangle (stripBounds().toFloat(), 5.0f);
         g.setColour (cLine); g.drawRoundedRectangle (stripBounds().toFloat().reduced (0.5f), 5.0f, 1.0f);
+        paintTransport (g);
         auto t = info.reduced (10, 8);
         g.setColour (cPri); g.setFont (uiFont (22.0f, true));
         g.drawText (juce::String (proc.tempo(), 1) + " BPM", t.removeFromTop (28), juce::Justification::centredLeft);
-        g.setFont (uiFont (10.5f, true)); g.setColour (proc.hostTempo() > 0 ? cSec : cDim);
-        g.drawText (proc.hostTempo() > 0 ? "(host)" : "(default - no host tempo)", t.removeFromTop (14), juce::Justification::centredLeft);
+        const auto src = proc.tempoSource();
+        g.setFont (uiFont (10.5f, true)); g.setColour (src == "default" ? cDim : cSec);
+        g.drawText (src == "manual" ? "(TEMPO knob)" : src == "host" ? (proc.hostIsPlaying() ? "(host)" : "(host - last tempo)") : "(no host tempo - 120)", t.removeFromTop (14), juce::Justification::centredLeft);
         t.removeFromTop (8);
         const auto c = proc.clipSettings();
         g.setColour (cSec); g.setFont (uiFont (11.5f, true));
@@ -153,10 +161,12 @@ public:
                 const float y = gr.getY() + rh * (float) r;
                 g.setColour (cDim); g.setFont (uiFont (std::min (9.5f, rh * 0.9f)));
                 g.drawText (label[rows[r]], juce::Rectangle<float> (gr.getX() + 2, y, lw - 4, rh), juce::Justification::centredLeft);
+                const int pv = proc.previewPart(), rp = cw::dsp::gmMap (order[rows[r]]).pad;
+                const float dim = pv > 0 && ! DrumPlayerProcessor::partHasPad (pv, rp) ? 0.25f : 1.0f;   // lanes not in the soloed part
                 for (auto& e : clip)
                     if (e.note == order[rows[r]])
                     {
-                        g.setColour (cPri.withAlpha (0.3f + 0.7f * e.vel));
+                        g.setColour (cPri.withAlpha ((0.3f + 0.7f * e.vel) * dim));
                         g.fillRect (juce::Rectangle<float> (x0 + gw * (float) (e.beat / len), y + 1, cw, std::max (1.0f, rh - 2)));
                     }
             }
@@ -168,21 +178,73 @@ public:
         for (int k = 0; k < kChips; ++k)
         {
             auto cb = chipBounds (k).toFloat();
-            g.setColour (hoverChip == k ? juce::Colour (0xff3a3a3a) : juce::Colour (0xff222222)); g.fillRoundedRectangle (cb, 4.0f);
-            g.setColour (k == kChips - 1 ? cSec : cPri.withAlpha (0.5f)); g.drawRoundedRectangle (cb.reduced (0.5f), 4.0f, 1.0f);
+            const bool live = k >= 1 && k <= DrumPlayerProcessor::kNumParts && proc.previewPart() == k - 1;   // this part is in the preview
+            g.setColour (live ? juce::Colour (0xff4a4a4a) : hoverChip == k ? juce::Colour (0xff3a3a3a) : juce::Colour (0xff222222)); g.fillRoundedRectangle (cb, 4.0f);
+            g.setColour (live ? cPri : k == kChips - 1 ? cSec : cPri.withAlpha (0.5f)); g.drawRoundedRectangle (cb.reduced (0.5f), 4.0f, live ? 1.5f : 1.0f);
             g.setColour (cPri); g.setFont (uiFont (10.5f, true));
             g.drawText (chipName (k), cb, juce::Justification::centred);
         }
         g.setColour (note.isNotEmpty() ? cSec : cDim); g.setFont (uiFont (9.5f));
         if (note.isNotEmpty()) g.drawText (note, chipBounds (kChips - 1).translated (0, -15).withHeight (14), juce::Justification::centred);
+        else if (hoverChip >= 0 && hoverChip < kChips - 1) { g.setColour (cDim); g.drawText ("click to listen - drag into your DAW", gridBounds().removeFromBottom (14).translated (0, 0), juce::Justification::centredRight); }
     }
+    void paintTransport (juce::Graphics& g)
+    {
+        const int part = proc.previewPart();
+        const bool playing = part >= 0, synced = proc.syncedToHost();
+        auto pb = playBounds().toFloat();
+        g.setColour (playing ? cPri : hoverPlay ? juce::Colour (0xff3a3a3a) : juce::Colour (0xff262626)); g.fillRoundedRectangle (pb, 5.0f);
+        g.setColour (playing ? cPri : cPri.withAlpha (0.6f)); g.drawRoundedRectangle (pb.reduced (0.5f), 5.0f, 1.5f);
+        const juce::Colour ink = playing ? cBg : cPri;
+        auto icon = pb.withSizeKeepingCentre (18, 18).withY (pb.getY() + 12);
+        g.setColour (ink);
+        if (playing) g.fillRect (icon.reduced (2));
+        else { juce::Path tri; tri.addTriangle (icon.getX() + 2, icon.getY(), icon.getX() + 2, icon.getBottom(), icon.getRight(), icon.getCentreY()); g.fillPath (tri); }
+        g.setFont (uiFont (14.0f, true));
+        g.drawText (playing ? "STOP" : synced ? "WITH HOST" : "PLAY", pb.withTrimmedTop (34).withHeight (18), juce::Justification::centred);
+        g.setFont (uiFont (9.5f, true)); g.setColour (playing ? cBg.withAlpha (0.8f) : cDim);
+        g.drawText (playing ? juce::String (chipName (1 + part)) : juce::String ("PREVIEW LOOP"), pb.withTrimmedTop (52).withHeight (13), juce::Justification::centred);
+        auto sb = syncBounds().toFloat();
+        const bool on = proc.apvts.getRawParameterValue ("patPlay")->load() > 0.5f;
+        g.setColour (on ? juce::Colour (0xff2e2e2e) : juce::Colour (0xff1c1c1c)); g.fillRoundedRectangle (sb, 4.0f);
+        g.setColour (on ? cPri : cLine.brighter (0.3f)); g.drawRoundedRectangle (sb.reduced (0.5f), 4.0f, 1.0f);
+        auto led = sb.removeFromLeft (22).withSizeKeepingCentre (8, 8);
+        g.setColour (on ? (synced ? cPri : cSec) : cOff); g.fillEllipse (led);
+        g.setColour (on ? cPri : cDim); g.setFont (uiFont (10.0f, true));
+        g.drawText ("WITH HOST", sb.withTrimmedRight (6), juce::Justification::centredLeft);
+    }
+    void togglePreview (int part)
+    {
+        const int now = proc.previewPart();   // part < 0: the PLAY / STOP button (starts the full loop)
+        if (now >= 0 && (part < 0 || part == now)) proc.stopPreview();
+        else proc.startPreview (juce::jmax (0, part));
+        repaint (stripBounds());
+    }
+    void toggleSync()
+    {
+        if (auto* p = proc.apvts.getParameter ("patPlay")) { p->beginChangeGesture(); p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f); p->endChangeGesture(); }
+        repaint (stripBounds());
+    }
+public:
+    // test hooks
+    void clickPlay() { togglePreview (-1); }
+    void clickChip (int c) { if (c >= 0 && c <= DrumPlayerProcessor::kNumParts) togglePreview (c == 0 ? 0 : c - 1); }
     int chipAt (juce::Point<int> p) const { for (int k = 0; k < kChips; ++k) if (chipBounds (k).contains (p)) return k; return -1; }
-    void mouseMove (const juce::MouseEvent& e) override { const int c = chipAt (e.getPosition()); if (c != hoverChip) { hoverChip = c; repaint (chipArea()); } }
-    void mouseExit (const juce::MouseEvent&) override { if (hoverChip >= 0) { hoverChip = -1; repaint (chipArea()); } }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const int c = chipAt (e.getPosition()); const bool hp = playBounds().contains (e.getPosition());
+        if (c != hoverChip || hp != hoverPlay) { hoverChip = c; hoverPlay = hp; repaint (stripBounds()); }
+    }
+    void mouseExit (const juce::MouseEvent&) override { if (hoverChip >= 0 || hoverPlay) { hoverChip = -1; hoverPlay = false; repaint (stripBounds()); } }
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (e.mouseWasDraggedSinceMouseDown() || e.mods.isPopupMenu()) return;
-        if (chipAt (e.getPosition()) == kChips - 1 && chipAt (e.getMouseDownPosition()) == kChips - 1) { proc.newFill(); note = {}; repaint(); }
+        const int c = chipAt (e.getPosition());
+        if (c != chipAt (e.getMouseDownPosition())) return;
+        if (c == kChips - 1) { proc.newFill(); note = {}; repaint(); return; }
+        if (c >= 0) { note = {}; clickChip (c); return; }   // a click on a loop chip previews that part (MIDI = the full loop)
+        if (playBounds().contains (e.getPosition()) && playBounds().contains (e.getMouseDownPosition())) clickPlay();
+        else if (syncBounds().contains (e.getPosition()) && syncBounds().contains (e.getMouseDownPosition())) toggleSync();
     }
     // the drag-out file for a chip (also the test hook)
     juce::File exportChip (int c, juce::String& err)
@@ -289,9 +351,10 @@ private:
         for (auto& pp : P.pad) key = key * 31 + pp.sound;
         if (key != lastKey) { lastKey = key; refresh(); dirty = true; }
         const auto cs = proc.clipSettings();
-        const juce::String ck = juce::String (cs.pattern) + "/" + juce::String (cs.fill) + "/" + juce::String (cs.fillBeats) + "/" + juce::String (cs.bars) + "/" + juce::String ((int) cs.seed);
+        const juce::String ck = juce::String (cs.pattern) + "/" + juce::String (cs.fill) + "/" + juce::String (cs.fillBeats) + "/" + juce::String (cs.bars) + "/" + juce::String ((int) cs.seed) + "/" + juce::String (juce::roundToInt (cs.swing * 100.0f));
         if (ck != clipKey) { clipKey = ck; clip = proc.clipEvents(); dirty = true; }
         if (proc.playPosition() >= 0 || lastPlay >= 0) { lastPlay = proc.playPosition(); repaint (gridBounds()); }
+        if (const int pp = proc.previewPart() * 4 + (proc.syncedToHost() ? 2 : 0) + (proc.apvts.getRawParameterValue ("patPlay")->load() > 0.5f ? 1 : 0); pp != lastTransport) { lastTransport = pp; repaint (stripBounds()); }
         if (std::abs (proc.tempo() - lastTempo) > 0.001) { lastTempo = proc.tempo(); dirty = true; }
         if (! demo)
             for (int i = 0; i < cw::dsp::kPads; ++i)
@@ -312,8 +375,8 @@ private:
     std::array<juce::String, cw::dsp::kPads> names;
     std::array<float, cw::dsp::kPads> flash {};
     std::array<int, cw::dsp::kPads> lastHits {};
-    int lastKey = -1, dragPad = -1, slow = 0, hoverChip = -1;
-    bool demo = false, dragging = false;
+    int lastKey = -1, dragPad = -1, slow = 0, hoverChip = -1, lastTransport = -99;
+    bool demo = false, dragging = false, hoverPlay = false;
     juce::String clipKey, note;
     std::vector<cw::pat::Ev> clip;
     double lastPlay = -1, lastTempo = 0;
@@ -325,4 +388,5 @@ public:
 std::unique_ptr<juce::Component> makeDisplay (DrumPlayerProcessor& p, Panel& pn) { return std::make_unique<PadDisplay> (p, pn); }
 void demoDisplay (juce::Component* c) { if (auto* d = dynamic_cast<PadDisplay*> (c)) d->demoFill(); }
 juce::File exportChip (juce::Component* c, int chip, juce::String& err) { if (auto* d = dynamic_cast<PadDisplay*> (c)) return d->exportChip (chip, err); err = "no display"; return {}; }
+void clickPreview (juce::Component* c, int chip) { if (auto* d = dynamic_cast<PadDisplay*> (c)) { if (chip < 0) d->clickPlay(); else d->clickChip (chip); } }
 } // namespace cwui

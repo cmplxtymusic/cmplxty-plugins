@@ -1,5 +1,5 @@
 // Renders the real DrumPlayerEditor to a PNG, and runs the processor-level tests.
-// usage: DrumPlayerScreenshot out.png [banner|menu|presets|big|empty|keys|params|proc]
+// usage: DrumPlayerScreenshot out.png [banner|menu|presets|big|empty|keys|params|proc|preview]
 #include "PluginEditor.h"
 #include <random>
 #include <cmath>
@@ -20,6 +20,19 @@ juce::File writeWav (const juce::String& name, double hz, int n, int ch)
         if (auto* w = wav.createWriterFor (os.get(), 44100.0, (unsigned) ch, 16, {}, 0)) { os.release(); std::unique_ptr<juce::AudioFormatWriter> ww (w); ww->writeFromAudioSampleBuffer (b, 0, n); }
     return f;
 }
+
+// host transport for the tests: tempo, playing / stopped, song position advanced by the test
+struct FakeHead final : juce::AudioPlayHead
+{
+    double bpm = 0, ppq = 0; bool playing = false;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        if (bpm > 0) p.setBpm (bpm);
+        p.setPpqPosition (ppq); p.setIsPlaying (playing);
+        return p;
+    }
+};
 
 // processor-level: MIDI pads, sample-accurate hits, choke, controllers, user samples in presets + state, mono, presets, state
 int procTests()
@@ -53,7 +66,8 @@ int procTests()
     {
         DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         check (proc.getTotalNumInputChannels() == 0 && proc.getTotalNumOutputChannels() == 2 && proc.acceptsMidi() && proc.getLatencySamples() == 0, "instrument: no audio in, stereo out, MIDI in, zero latency");
-        check (proc.getParameters().size() == 59 && v (proc, "noteMap") == 0 && v (proc, "patPlay") == 0 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1, "59 parameters with defaults (kit, hats choke, GM map, pattern stopped)");
+        check (proc.getParameters().size() == 62 && std::fabs (v (proc, "swing") - 0.5f) < 1e-6 && v (proc, "noteMap") == 0 && v (proc, "patPlay") == 0 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1
+               && v (proc, "bpm") == 0 && v (proc, "softClip") == 1, "62 parameters with defaults (kit, hats choke, GM map, pattern stopped, tempo Host, soft clip on, swing straight)");
         set (proc, "noteMap", 1);   // the 1.0 tests below use the chromatic map
         check (txt (proc, "p1Pan", -0.5f) == "L50" && txt (proc, "p1Pan", 0.0f) == "C" && txt (proc, "p1Decay", 4000.0f) == "Full" && txt (proc, "p1Sound", 16) == "Sample", "pan / decay / sound text");
         auto y = render (proc, 20, {});
@@ -208,14 +222,34 @@ int procTests()
         for (size_t k = 0; k < std::min (a.size(), b.size()); ++k)
         { if (a[k].beat < 12) sameGroove = sameGroove && a[k].beat == b[k].beat && a[k].note == b[k].note; else diffFill = diffFill || a[k].beat != b[k].beat || a[k].note != b[k].note || a[k].vel != b[k].vel; }
         check (sameGroove && diffFill, "NEW FILL changes the fill bar and leaves the groove alone");
+        // 1.2 swing: 50 % = the 1.1 clip exactly; 66 % moves every second 16th of the groove by 1/12 beat, fills stay straight
+        set (p, "pattern", 1); set (p, "fillStyle", 2); set (p, "dragLen", 2); set (p, "fillLen", 2);
+        cw::pat::Clip c0 = p.clipSettings(); c0.swing = 0.5f; std::vector<cw::pat::Ev> straight; cw::pat::build (c0, straight);
+        const auto now = p.clipEvents();
+        bool same = now.size() == straight.size(); for (size_t k = 0; same && k < now.size(); ++k) same = now[k].beat == straight[k].beat && now[k].note == straight[k].note;
+        set (p, "swing", 0.66f); const auto sw = p.clipEvents();
+        int moved = 0, wrong = 0;
+        for (auto& e : sw)
+        {
+            const double st = e.beat * 4.0, fr = st - std::floor (st + 1e-9);
+            if (e.beat < 12.0 && std::fabs (fr - 0.32) < 1e-6) ++moved;            // 0.08 beat = 0.32 of a 16th
+            else if (e.beat < 12.0 && fr > 1e-6 && std::fabs (fr - 0.5) > 1e-6) ++wrong;
+            if (e.beat >= 12.0 && std::fabs (fr) > 1e-6 && std::fabs (fr - 0.5) > 1e-6) ++wrong;   // Roll fill: straight 16ths / 32nds
+        }
+        check (same && moved > 20 && wrong == 0, "SWING: 50 % = 1.1 timing; 66 % delays the off 16ths of the groove only");
+        check (p.clipTitle().contains ("swing 66"), "the drag-out file name says the swing");
+        set (p, "swing", 0.5f);
     }
     {   // 1.1: pattern playback follows tempo; MIDI and WAV drag-out files
         DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         auto y = render (proc, 100, {});
         check (rmsOf (y, 0) == 0.0 && proc.hostTempo() == 0 && proc.tempo() == 120.0 && proc.tempoSource() == "default", "pattern off = silent; no host tempo -> 120 default");
         set (proc, "patPlay", 1); y = render (proc, 100, {});
-        check (rmsOf (y, 0) > 0.01 && proc.playPosition() >= 0, "pattern play makes sound and moves the playhead");
+        check (rmsOf (y, 0) == 0.0 && proc.playPosition() < 0, "PLAY WITH HOST is silent while the host is not playing (1.1 free-ran)");
         set (proc, "patPlay", 0);
+        proc.startPreview (0); y = render (proc, 100, {});
+        check (rmsOf (y, 0) > 0.01 && proc.playPosition() >= 0 && proc.previewPart() == 0, "PREVIEW plays with no host at all and moves the playhead");
+        proc.stopPreview(); render (proc, 20, {});
         set (proc, "dragLen", 1); set (proc, "fillStyle", 2);
         juce::String err; auto mf = proc.exportMidi (err);
         juce::MidiFile mid; bool parsed = false; int notes = 0, nonGm = 0; double bpm = 0, endBeat = 0;
@@ -253,6 +287,109 @@ int procTests()
         }
         check (okParts == DrumPlayerProcessor::kNumParts, "audio drag-outs (full, kick, snare, top, toms): 24-bit, exactly 2 bars, not silent");
         mf.deleteFile();
+    }
+    {   // 1.2: preview = drag-out, sample for sample, once the longest sound has had time to wrap (the 4.8 s crash of Cinematic Impacts needs 2 passes) (host stopped at 140 BPM, several kits / patterns / parts)
+        FakeHead head; head.bpm = 140.0;
+        int bad = 0, n = 0; float worst = 0;
+        for (int kit : { 0, 2, 4, 15 }) for (int pat : { 0, 4, 7, 13 }) for (int part : { 0, 1, 3 })
+        {
+            DrumPlayerProcessor proc; proc.setPlayHead (&head); proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+            proc.presets.loadFactory (kit); set (proc, "pattern", (float) pat); set (proc, "fillStyle", (float) (1 + pat % 8)); set (proc, "dragLen", 1);
+            set (proc, "swing", pat == 13 ? 0.62f : 0.5f);
+            render (proc, 1, {});   // the processor learns the host tempo
+            juce::AudioBuffer<float> dl; proc.renderClip (part, dl, sr);
+            const int N = dl.getNumSamples();
+            proc.startPreview (part);
+            std::vector<float> R; auto y = render (proc, (4 * N) / bs + 2, {}, 2, &R);
+            float d = 0;
+            for (int pass = 2; pass < 4; ++pass) for (int i = 0; i < N; ++i)
+                d = std::max ({ d, std::fabs (y[(size_t) (pass * N + i)] - dl.getSample (0, i)), std::fabs (R[(size_t) (pass * N + i)] - dl.getSample (1, i)) });
+            if (d >= 1e-5f)
+            {
+                int at = 0; float dm = 0; for (int pass = 2; pass < 4; ++pass) for (int i = 0; i < N; ++i) { const float q = std::fabs (y[(size_t) (pass * N + i)] - dl.getSample (0, i)); if (q > dm) { dm = q; at = pass * N + i; } }
+                std::printf ("  mismatch kit %d pattern %d part %d: %.3g at pass %d sample %d (N %d)\n", kit, pat, part, d, at / N, at % N, N);
+            }
+            worst = std::max (worst, d); ++n; bad += d < 1e-5f ? 0 : 1;
+            const bool lenOk = std::abs (N - (int) std::llround (8 * 60.0 / 140.0 * sr)) <= 1;
+            bad += lenOk ? 0 : 1;
+        }
+        std::printf ("  preview vs drag-out: %d cases, worst max diff %.3g (%.1f dBFS)\n", n, worst, 20 * std::log10 (worst + 1e-30));
+        check (bad == 0, "preview at the host's last tempo (host stopped) = the drag-out WAV once the longest tail has come round (passes 3 and 4), every part");
+    }
+    {   // 1.2: preview start / stop / host transport
+        FakeHead head; head.bpm = 128.0;
+        DrumPlayerProcessor proc; proc.setPlayHead (&head); proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+        set (proc, "fillStyle", 0);
+        proc.startPreview (0);
+        auto y = render (proc, 1, {});
+        check (y[0] != 0.0f && proc.dspEngine().hits[0].load() == 1, "preview starts on the first sample of the next block with the beat-1 kick");
+        y = render (proc, 200, {});   // ~2 s
+        const int hitsBefore = proc.dspEngine().hits[0].load();
+        proc.stopPreview();
+        auto z = render (proc, 10, {});
+        double after = rmsOf (z, (size_t) (0.035 * sr));
+        float step = 0; for (size_t i = 1; i < z.size(); ++i) step = std::max (step, std::fabs (z[i] - z[i - 1]));
+        float stepPlay = 0; for (size_t i = 1; i < y.size(); ++i) stepPlay = std::max (stepPlay, std::fabs (y[i] - y[i - 1]));
+        std::printf ("  stop: rms after 35 ms %.2g, largest sample step during the fade %.4f (while playing %.4f)\n", after, step, stepPlay);
+        check (after == 0.0 && proc.previewPart() < 0 && proc.dspEngine().hits[0].load() == hitsBefore, "STOP: the preview's sounds fade out in 30 ms, no new hits");
+        check (step <= stepPlay, "STOP: the fade adds no step bigger than the pattern itself has (no click)");
+        // the host starting playback ends the preview; PLAY WITH HOST then follows the song position
+        proc.startPreview (0); render (proc, 50, {});
+        head.playing = true; head.ppq = 0; render (proc, 1, {});
+        check (proc.previewPart() < 0, "host transport start stops the preview (no doubling with the song)");
+        set (proc, "patPlay", 1); head.ppq = 3.0;
+        proc.startPreview (0); render (proc, 1, {});
+        check (proc.previewPart() < 0 && proc.syncedToHost(), "while PLAY WITH HOST is sounding, PREVIEW does not start a second copy");
+        set (proc, "patPlay", 0); head.playing = false; render (proc, 1, {});
+        proc.startPreview (1); render (proc, 2, {}); proc.startPreview (3); render (proc, 2, {});
+        check (proc.previewPart() == 3, "clicking another loop chip switches the preview to that part");
+        head.playing = true; render (proc, 1, {}); head.playing = false;
+        // last host tempo is kept while stopped; TEMPO knob overrides it
+        DrumPlayerProcessor q; FakeHead h2; h2.bpm = 97.0; q.setPlayHead (&h2); q.setRateAndBufferSizeDetails (sr, bs); q.prepareToPlay (sr, bs);
+        render (q, 1, {}); h2.bpm = 0; render (q, 1, {});
+        check (std::fabs (q.tempo() - 97.0) < 1e-9 && q.tempoSource() == "host", "the host's last tempo is kept when it stops sending one");
+        set (q, "bpm", 174.0f);
+        juce::AudioBuffer<float> dl; q.renderClip (0, dl, sr);
+        check (std::fabs (q.tempo() - 174.0) < 1e-3 && q.tempoSource() == "manual" && std::abs (dl.getNumSamples() - (int) std::llround (16 * 60.0 / 174.0 * sr)) <= 1, "TEMPO knob overrides the host for the preview and the drag-outs");
+        check (q.apvts.getParameter ("bpm")->getText (0.0f, 20) == "Host" && std::fabs (q.apvts.getParameter ("bpm")->getValueForText ("host")) < 1e-6, "TEMPO shows / takes Host at its minimum");
+    }
+    {   // 1.2: soft clip + seamless loops + voices
+        DrumPlayerProcessor a; a.setRateAndBufferSizeDetails (sr, bs); a.prepareToPlay (sr, bs);
+        a.presets.loadFactory (15);   // Cinematic Impacts: the hottest kit (+7 dBFS peaks in 1.1)
+        set (a, "pattern", 16); set (a, "dragLen", 2);
+        juce::AudioBuffer<float> bOn; a.renderClip (0, bOn, sr);
+        set (a, "softClip", 0); juce::AudioBuffer<float> bOff; a.renderClip (0, bOff, sr);
+        const float pkOn = bOn.getMagnitude (0, bOn.getNumSamples()), pkOff = bOff.getMagnitude (0, bOff.getNumSamples());
+        std::printf ("  soft clip: peak %.2f dBFS on, %.2f dBFS off\n", 20 * std::log10 (pkOn), 20 * std::log10 (pkOff));
+        check (pkOn <= cw::dsp::kClipCeil && pkOff > 1.0f, "SOFT CLIP keeps the drag-out under -0.3 dBFS; off it goes over 0 dBFS like 1.1");
+        juce::String err; const auto f = a.exportPart (0, err);
+        juce::WavAudioFormat wav; std::unique_ptr<juce::AudioFormatReader> r (wav.createReaderFor (f.createInputStream().release(), true));
+        check (r != nullptr && r->bitsPerSample == 32 && r->usesFloatingPointData, "a drag-out over 0 dBFS is written as 32-bit float (nothing cut off)");
+        r.reset(); f.deleteFile();
+        float lin = 0; for (float x : { 0.1f, 0.5f, 0.7f }) lin = std::max (lin, std::fabs (cw::dsp::softClip (x) - x));
+        check (lin == 0.0f && cw::dsp::softClip (10.0f) <= cw::dsp::kClipCeil && cw::dsp::softClip (-10.0f) >= -cw::dsp::kClipCeil, "soft clip curve: untouched below -3 dBFS, never past -0.3 dBFS");
+        // old sessions (no softClip) keep their sound
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        if (xml) for (auto* e = xml->getFirstChildElement(); e != nullptr; ) { auto* nx = e->getNextElement(); if (e->getStringAttribute ("id") == "softClip") xml->removeChildElement (e, true); e = nx; }
+        juce::MemoryBlock mb2; juce::AudioProcessor::copyXmlToBinary (*xml, mb2);
+        DrumPlayerProcessor b; set (b, "softClip", 1); b.setStateInformation (mb2.getData(), (int) mb2.getSize());
+        check (v (b, "softClip") == 0, "a 1.1 session loads with Soft Clip off (sounds exactly as before)");
+        DrumPlayerProcessor c; set (c, "softClip", 1); c.presets.loadFactory (3);
+        check (v (c, "softClip") == 1, "loading a kit leaves Soft Clip alone");
+        // seamless loop: an open hat ringing over the loop point is choked by the closed hat on beat 1, as when the loop repeats
+        DrumPlayerProcessor d; d.setRateAndBufferSizeDetails (sr, bs); d.prepareToPlay (sr, bs);
+        set (d, "pattern", 7); set (d, "fillStyle", 0); set (d, "dragLen", 0); set (d, "p5Decay", 4000.0f);
+        juce::AudioBuffer<float> one; d.renderClip (0, one, sr);
+        d.startPreview (0); const int N = one.getNumSamples(); auto y = render (d, (4 * N) / bs + 2, {});
+        float dd = 0; for (int i = 0; i < N; ++i) dd = std::max (dd, std::fabs (y[(size_t) (3 * N + i)] - one.getSample (0, i)));
+        check (dd < 1e-5f, "1-bar drag-out = the 4th pass of the looping preview (tails + chokes across the loop point)");
+        // voices: a 64-hit burst never hard-cuts a voice
+        DrumPlayerProcessor e; e.setRateAndBufferSizeDetails (sr, bs); e.prepareToPlay (sr, bs); set (e, "noteMap", 1);
+        for (int p = 1; p <= 8; ++p) set (e, (juce::String ("p") + juce::String (p) + "Choke").toRawUTF8(), 0);
+        std::vector<std::pair<int, juce::MidiMessage>> ev; for (int k = 0; k < 120; ++k) ev.push_back ({ k * 240, on (36 + k % 8, 1.0f) });
+        y = render (e, 70, ev);
+        check (e.dspEngine().hardSteals == 0, "120 overlapping hits (60 in 5 ms windows max): soft steal only, no hard-cut voices");
     }
     {   // state
         DrumPlayerProcessor a; a.uiWidth = 1320; a.uiHeight = 1046;
@@ -294,7 +431,7 @@ int main (int argc, char** argv)
         std::printf ("%d params, %d not automatable\n", proc.getParameters().size(), bad);
         return bad;
     }
-    if (mode.isEmpty() || mode == "big") proc.presets.loadFactory (2);   // Techno Warehouse for the product shot
+    if (mode.isEmpty() || mode == "big" || mode == "preview") proc.presets.loadFactory (2);   // Techno Warehouse for the product shot
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* e = dynamic_cast<DrumPlayerEditor*> (ed.get());
     ed->setVisible (true);
@@ -314,6 +451,12 @@ int main (int argc, char** argv)
     }
     if (mode != "empty") cwui::demoDisplay (e->getPanel().display());
     if (mode == "menu") e->getPanel().demoKnobMenu();
+    if (mode == "preview")   // the preview running (TOP part soloed via its chip), playhead mid-loop
+    {
+        cwui::clickPreview (e->getPanel().display(), 4);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer m;
+        for (int k = 0; k < 300; ++k) { buf.clear(); proc.processBlock (buf, m); }
+    }
     if (mode == "presets") e->getPanel().demoPresetMenu();
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);

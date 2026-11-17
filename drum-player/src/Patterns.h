@@ -43,7 +43,7 @@ enum FillStyle { kNoFill = 0, kAuto, kRoll, kBuild, kToms, kTriplets, kFlams, kB
 inline const char* fillName (int s) { static const char* n[] = { "Off", "Auto", "Roll", "Build", "Toms", "Triplets", "Flams", "Break", "Stutter" }; return s >= 0 && s < kNumFill ? n[s] : "Off"; }
 
 struct Ev { double beat; int note; float vel; };
-struct Clip { int bars = 4; int pattern = 0, fill = kAuto, fillBeats = 4; uint32_t seed = 1; };
+struct Clip { int bars = 4; int pattern = 0, fill = kAuto, fillBeats = 4; uint32_t seed = 1; float swing = 0.5f; };   // swing: 0.5 straight .. 0.75 (1.2.0)
 
 struct Rng { uint32_t s; explicit Rng (uint32_t x) : s (x * 2654435761u + 0x9e3779b9u) { next(); } uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; } float f() { return (next() & 0xffffff) / 16777216.0f; } int i (int n) { return (int) (next() % (uint32_t) std::max (1, n)); } };
 
@@ -123,7 +123,8 @@ inline void build (const Clip& c, std::vector<Ev>& out)
             const float v = ch == 'X' ? 1.0f : ch == 'x' ? 0.8f : ch == 'o' ? 0.4f : 0.0f;
             const double b = k * 0.25;
             if (v <= 0 || b >= fillStart - 1e-9) continue;
-            out.push_back ({ b, l.note, v });
+            // 1.2.0 swing: every second 16th of the groove moves later (0.5 = straight, 0.66 = triplet feel, 0.75 = dotted); fills stay straight
+            out.push_back ({ (k & 1) ? b + (std::clamp ((double) c.swing, 0.5, 0.75) - 0.5) * 0.5 : b, l.note, v });
         }
     }
     if (fill)

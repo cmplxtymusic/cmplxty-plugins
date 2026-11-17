@@ -790,7 +790,16 @@ void Panel::resized()
         if (nside > 0) col = nk > 0 ? body.removeFromRight (ss.columnW) : body;
         // side column: combos and toggles stacked, vertically centred
         int need = 0; for (auto& c : ss.ctls) need += c.kind == 'c' ? 44 : c.kind == 't' ? 26 : 0;
+        // 1.2.0: a side column that doesn't fit its height is split in two: combos on the left half, toggles on the right
+        const bool split = nk > 0 && need > col.getHeight();
+        juce::Rectangle<int> col2;
+        if (split)
+        {
+            col2 = col.removeFromRight (col.getWidth() / 2); col.removeFromRight (6);
+            need = 0; for (auto& c : ss.ctls) need += c.kind == 'c' ? 44 : 0;
+        }
         int y = col.getY() + juce::jmax (0, (col.getHeight() - need) / 2);
+        int y2 = col2.getY() + juce::jmax (0, (col2.getHeight() - 26) / 2);
         const int kw = nk > 0 ? body.getWidth() / nk : 0;
         int kx = body.getX();
         for (auto& c : ss.ctls)
@@ -811,6 +820,11 @@ void Panel::resized()
             {
                 auto& k = *combos[ci++];
                 k.label.setBounds (col.getX() + 2, y, col.getWidth() - 4, 15); k.box.setBounds (col.getX() + 2, y + 16, col.getWidth() - 4, 24); y += 44;
+            }
+            else if (split)
+            {
+                auto& k = *togs[ti++];
+                k.label.setBounds (col2.getX() + 2, y2 + 2, col2.getWidth() - 50, 18); k.button.setBounds (col2.getRight() - 44, y2 + 2, 42, 18); y2 += 26;
             }
             else
             {

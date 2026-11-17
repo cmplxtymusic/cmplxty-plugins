@@ -25,6 +25,7 @@ inline float num (const juce::String& s)
 inline juce::String fmt (float v, const juce::String& unit)
 {
     if (unit == "int") return juce::String (juce::roundToInt (v));
+    if (unit == "BPM-host") return v < 20.0f ? juce::String ("Host") : juce::String (v, 1) + " BPM";   // below 20 = follow the host tempo
     if (unit == "pan") { const int p = juce::roundToInt (v * 100.0f); return p == 0 ? juce::String ("C") : (p < 0 ? "L" : "R") + juce::String (std::abs (p)); }
     if (unit == "ms-full" && v >= 3999.5f) return "Full";
     if (unit == "ms-full") return (v < 10.0f ? juce::String (v, 1) : juce::String (juce::roundToInt (v))) + " ms";
@@ -44,6 +45,7 @@ inline float parse (const juce::String& s, const juce::String& unit)
     const auto u = s.trim().toUpperCase();
     if (unit == "pan") { if (u.startsWith ("C")) return 0.0f; const float m = std::abs (num (s)) / 100.0f; return u.startsWith ("L") || u.startsWith ("-") ? -m : m; }
     if (unit == "ms-full" && u.startsWith ("F")) return 4000.0f;
+    if (unit == "BPM-host" && (u.startsWith ("H") || u.startsWith ("A"))) return 0.0f;
     return unit == "%" ? num (s) / 100.0f : num (s);
 }
 } // namespace ptab
@@ -63,7 +65,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout (const PDef (&def
             // unit "Hz-off": a frequency whose minimum means the feature is off (shown and typed as "Off")
             const bool offAtMin = String (d.unit) == "Hz-off";
             const String unit (offAtMin ? "Hz" : d.unit);
-            const String label (unit == "int" || unit == "pan" || unit == "ms-full" ? "" : unit);
+            const String label (unit == "int" || unit == "pan" || unit == "ms-full" ? "" : unit == "BPM-host" ? "" : unit);
             const float lo = d.lo;
             auto a = AudioParameterFloatAttributes().withLabel (label)
                          .withStringFromValueFunction ([unit, offAtMin, lo] (float v, int) { return offAtMin && v <= lo + 0.5f ? String ("Off") : ptab::fmt (v, unit); })

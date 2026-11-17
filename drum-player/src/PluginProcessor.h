@@ -57,10 +57,18 @@ public:
     juce::AudioFormatManager& audioFormats() { return formats; }
 
     // 1.1.0 patterns, fills, tempo and drag-outs
-    double hostTempo() const noexcept { return hostBpm.load(); }          // 0 = the host gives none (Standalone)
-    double tempo() const noexcept { return hostBpm.load() > 0 ? hostBpm.load() : 120.0; }
-    juce::String tempoSource() const { return hostBpm.load() > 0 ? "host" : "default"; }
+    double hostTempo() const noexcept { return hostBpm.load(); }          // last tempo the host sent (kept while it is stopped); 0 = never (Standalone)
+    // 1.2.0: the TEMPO knob (20-250 BPM) overrides the host; at "Host" the host's last tempo is used, 120 if the host never sent one
+    double tempo() const noexcept { const float m = val (kParamBpm); return m >= 20.0f ? (double) m : hostBpm.load() > 0 ? hostBpm.load() : 120.0; }
+    juce::String tempoSource() const { return val (kParamBpm) >= 20.0f ? "manual" : hostBpm.load() > 0 ? "host" : "default"; }
     double playPosition() const noexcept { return playBeat.load(); }      // beat in the clip, < 0 = not playing
+    // 1.2.0 preview: plays the clip (or one part of it) through the plug-in's output, free-running at tempo(), looping, without the host
+    // transport. Stops by itself when the host transport starts or stops. Hits land on the same samples as in the drag-out WAV.
+    void startPreview (int part) { pvCmd.store (1 + juce::jlimit (0, kNumParts - 1, part)); }
+    void stopPreview() { pvCmd.store (-1); }
+    int previewPart() const noexcept { const int c = pvCmd.load(); return c > 0 ? c - 1 : c < 0 ? -1 : pvState.load(); }   // -1 = stopped
+    bool hostIsPlaying() const noexcept { return hostRunning.load(); }
+    bool syncedToHost() const noexcept { return hostRunning.load() && val (kParamPatPlay) > 0.5f; }   // PLAY WITH HOST is sounding
     cw::pat::Clip clipSettings() const;
     std::vector<cw::pat::Ev> clipEvents() const { std::vector<cw::pat::Ev> v; cw::pat::build (clipSettings(), v); return v; }
     juce::String clipTitle() const;
@@ -71,7 +79,9 @@ public:
     juce::File exportFolder() const;
     juce::File exportMidi (juce::String& err) const;                      // GM notes, host tempo, 960 ppq, the clip length
     juce::File exportPart (int part, juce::String& err);                  // 24-bit WAV, whole bars, tail wrapped to the start (loops)
-    void renderClip (int part, juce::AudioBuffer<float>& out, double sr); // offline render through this kit (message thread)
+    void renderClip (int part, juce::AudioBuffer<float>& out, double sr); // offline render through this kit (message thread): the loop as it
+                                                                          // sounds when it repeats (tails, chokes and voices from the previous pass)
+    static constexpr int kParamPatPlay = 58, kParamBpm = 59, kParamSoftClip = 60;
 
 private:
     struct UiPads
@@ -95,8 +105,17 @@ private:
     std::vector<std::atomic<float>*> raw;
     std::vector<float> scratchR;
     std::atomic<double> hostBpm { 0.0 }, rate { 48000.0 }, playBeat { -1.0 };
-    double freeBeat = 0; int lastClipKey = -1;
+    juce::int64 lastClipKey = -1;
     std::vector<cw::pat::Ev> clipEv;
+    // preview (audio thread)
+    struct PvEv { juce::int64 at; int note; float vel; };
+    std::atomic<int> pvCmd { 0 }, pvState { -1 };
+    std::atomic<bool> hostRunning { false };
+    bool wasHostPlaying = false;
+    int pvPart = -1; juce::int64 pvPos = 0, pvN = 0;
+    juce::int64 pvKey = -1;
+    std::vector<PvEv> pvEv;
+    std::vector<cw::pat::Ev> pvClip;
     float val (int i) const { return raw[(size_t) i]->load (std::memory_order_relaxed); }
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrumPlayerProcessor)
 };

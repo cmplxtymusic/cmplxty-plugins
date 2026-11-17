@@ -34,11 +34,16 @@ const cw::PDef kParams[] = {
     { "fillLen",  "Fill Length",     'c', 0, 3, 1, 1, 2.0f, "", "1 beat|2 beats|1 bar|2 bars" },
     { "dragLen",  "Loop Length",     'c', 0, 3, 1, 1, 2.0f, "", "1 bar|2 bars|4 bars|8 bars" },
     { "fillSeed", "Fill Variation",  'f', 1.0f, 999.0f, 1.0f, 1.0f, 1.0f, "" },
-    { "patPlay",  "Play Pattern",    'b', 0, 1, 1, 1, 0.0f, "" },
+    { "patPlay",  "Play With Host",  'b', 0, 1, 1, 1, 0.0f, "" },
+    // 1.2.0
+    { "bpm",      "Tempo",           'f', 0.0f, 250.0f, 0.1f, 1.0f, 0.0f, "BPM-host" },
+    { "softClip", "Soft Clip",       'b', 0, 1, 1, 1, 1.0f, "" },
+    { "swing",    "Swing",           'f', 0.5f, 0.75f, 0.01f, 1.0f, 0.5f, "%" },
 };
 constexpr int kPerPad = 6, kVolume = 8 * kPerPad, kVelSens = kVolume + 1, kKitTune = kVolume + 2, kBaseNote = kVolume + 3, kNoteMap = kVolume + 4,
               kPattern = kVolume + 5, kFillStyle = kVolume + 6, kFillLen = kVolume + 7, kDragLen = kVolume + 8, kFillSeed = kVolume + 9, kPatPlay = kVolume + 10,
-              kNumParams = kVolume + 11;
+              kBpm = kVolume + 11, kSoftClip = kVolume + 12, kSwing = kVolume + 13, kNumParams = kVolume + 14;
+static_assert (kPatPlay == DrumPlayerProcessor::kParamPatPlay && kBpm == DrumPlayerProcessor::kParamBpm && kSoftClip == DrumPlayerProcessor::kParamSoftClip, "header indices");
 // pattern / loop settings are not part of a kit: loading a kit preset keeps them
 bool notInKit (const juce::String& id) { for (int i = kNoteMap; i < kNumParams; ++i) if (id == kParams[i].id) return true; return false; }
 juce::String safeName (juce::String s) { s = juce::File::createLegalFileName (s).trim(); return s.isEmpty() ? juce::String ("Untitled") : s; }
@@ -56,7 +61,7 @@ DrumPlayerProcessor::DrumPlayerProcessor()
     presets.saveExtra = [this] (juce::XmlElement& x) { writeKit (x); };
     presets.loadExtra = [this] (const juce::XmlElement* x) { readKit (x); };
     presets.keep = notInKit;
-    clipEv.reserve (8192);
+    clipEv.reserve (8192); pvClip.reserve (8192); pvEv.reserve (8192);
 }
 
 DrumPlayerProcessor::~DrumPlayerProcessor() = default;
@@ -78,13 +83,15 @@ cw::dsp::Params DrumPlayerProcessor::currentParams() const
     }
     p.volumeDb = val (kVolume); p.velSens = val (kVelSens); p.kitTune = val (kKitTune); p.baseNote = 24 + 12 * juce::jlimit (0, 3, (int) val (kBaseNote));
     p.gm = (int) val (kNoteMap) == 0;
+    p.softClip = val (kSoftClip) > 0.5f;
     return p;
 }
 
 void DrumPlayerProcessor::prepareToPlay (double sr, int block)
 {
     engine.prepare (sr > 0 ? sr : 48000.0);
-    rate.store (sr > 0 ? sr : 48000.0); freeBeat = 0; lastClipKey = -1;
+    rate.store (sr > 0 ? sr : 48000.0); lastClipKey = -1;
+    pvPart = -1; pvPos = 0; pvN = 0; pvKey = -1; pvState.store (-1);
     engine.setParams (currentParams());
     scratchR.assign ((size_t) juce::jmax (block, 4096), 0.0f);
     setLatencySamples (0);
@@ -112,7 +119,8 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     float* L = buffer.getWritePointer (0);
     float* R = nch > 1 ? buffer.getWritePointer (1) : scratchR.data();
 
-    // host tempo + position (1.1.0: the pattern follows the host BPM, the display shows it)
+    // host tempo + position (1.1.0: the pattern follows the host BPM, the display shows it). 1.2.0: the last tempo is kept while the host
+    // is stopped or sends none, so the preview free-runs at the project tempo.
     double ppq = 0, bpm = 0; bool hostPlaying = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
@@ -121,38 +129,70 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             if (auto q = pos->getPpqPosition()) ppq = *q;
             hostPlaying = pos->getIsPlaying() && pos->getPpqPosition().hasValue() && bpm > 0;
         }
-    hostBpm.store (bpm > 0 && bpm < 1000 ? bpm : 0.0);
+    if (bpm > 0 && bpm < 1000) hostBpm.store (bpm);
+    hostRunning.store (hostPlaying);
 
-    // pattern preview: events of this block, merged with the incoming MIDI by sample position
-    struct Hit { int at; int note; float vel; bool gm; };
-    std::array<Hit, 512> hits; int nh = 0;
-    const bool play = val (kPatPlay) > 0.5f;
-    if (play)
+    struct Hit { int at; int note; float vel; bool gm; int src; };
+    std::array<Hit, 1024> hits; int nh = 0;
+    const auto cs = clipSettings();
+    const double sr = rate.load(), tp = tempo(), spb = 60.0 / tp * sr;
+
+    // preview commands from the editor; the host transport starting or stopping ends the preview (no doubling with the song)
+    if (const int cmd = pvCmd.exchange (0); cmd != 0)
     {
-        const auto c = clipSettings();
-        const int key = c.pattern | (c.fill << 6) | (c.fillBeats << 10) | (c.bars << 14) | ((int) c.seed << 18);
-        if (key != lastClipKey) { cw::pat::build (c, clipEv); lastClipKey = key; }
-        const double tempo = hostBpm.load() > 0 ? hostBpm.load() : 120.0, sr = rate.load();
-        const double beatsPerSample = tempo / 60.0 / sr, len = c.bars * 4.0;
-        const double b0 = hostPlaying ? ppq : freeBeat;
+        if (cmd < 0) { if (pvPart >= 0) engine.fadeSource (1, 0.03); pvPart = -1; }
+        else if (! (hostPlaying && val (kPatPlay) > 0.5f)) { if (pvPart < 0) pvPos = 0; pvPart = cmd - 1; pvKey = -1; }   // a new part keeps its place in the bar
+    }
+    if (pvPart >= 0 && hostPlaying != wasHostPlaying) { engine.fadeSource (1, 0.03); pvPart = -1; }
+    wasHostPlaying = hostPlaying;
+    pvState.store (pvPart);
+
+    if (pvPart >= 0)
+    {
+        // events on whole samples of the loop, the same rounding as renderClip (llround (beat * samples per beat)), so the preview is the drag-out
+        const juce::int64 N = std::max<juce::int64> (1, std::llround (cs.bars * 4.0 * spb));
+        const juce::int64 key = ((juce::int64) (cs.pattern | (cs.fill << 6) | (cs.fillBeats << 10) | (cs.bars << 14) | ((int) cs.seed << 18)) * 32 + juce::roundToInt (cs.swing * 100.0f) - 50) * 8 + pvPart;
+        if (key != pvKey || N != pvN)
+        {
+            if (pvN > 0 && N != pvN) pvPos = (juce::int64) ((double) pvPos * (double) N / (double) pvN);   // tempo change: keep the place in the bar
+            cw::pat::build (cs, pvClip); pvEv.clear();
+            for (const auto& e : pvClip)
+                if (const auto h = cw::dsp::gmMap (e.note); h.pad >= 0 && partHasPad (pvPart, h.pad))
+                    pvEv.push_back ({ juce::jlimit<juce::int64> (0, N - 1, std::llround (e.beat * spb)), e.note, e.vel });
+            pvKey = key; pvN = N;
+        }
+        if (pvPos >= N || pvPos < 0) pvPos = 0;
+        for (int done = 0; done < n;)
+        {
+            const int chunk = (int) std::min<juce::int64> (n - done, N - pvPos);
+            for (const auto& e : pvEv)
+                if (e.at >= pvPos && e.at < pvPos + chunk && nh < (int) hits.size()) hits[(size_t) nh++] = { done + (int) (e.at - pvPos), e.note, e.vel, true, 1 };
+            done += chunk; pvPos += chunk; if (pvPos >= N) pvPos = 0;
+        }
+        playBeat.store ((double) pvPos / spb);
+    }
+    else if (val (kPatPlay) > 0.5f && hostPlaying)   // PLAY WITH HOST: locked to the host's song position
+    {
+        const juce::int64 key = (juce::int64) (cs.pattern | (cs.fill << 6) | (cs.fillBeats << 10) | (cs.bars << 14) | ((int) cs.seed << 18)) * 32 + juce::roundToInt (cs.swing * 100.0f) - 50;
+        if (key != lastClipKey) { cw::pat::build (cs, clipEv); lastClipKey = key; }
+        const double beatsPerSample = 1.0 / spb, len = cs.bars * 4.0;
         for (int pass = 0; pass < 2; ++pass)   // the block may run past the clip end once
         {
-            const double base = std::floor (b0 / len) * len + pass * len;
+            const double base = std::floor (ppq / len) * len + pass * len;
             for (const auto& e : clipEv)
             {
-                const double at = (base + e.beat - b0) / beatsPerSample;
-                if (at >= 0 && at < n && nh < (int) hits.size()) hits[(size_t) nh++] = { (int) at, e.note, e.vel, true };
+                const auto at = std::llround ((base + e.beat - ppq) / beatsPerSample);
+                if (at >= 0 && at < n && nh < (int) hits.size()) hits[(size_t) nh++] = { (int) at, e.note, e.vel, true, 0 };
             }
         }
-        freeBeat = b0 + n * beatsPerSample;
-        playBeat.store (std::fmod (b0, len));
+        playBeat.store (std::fmod (ppq, len));
     }
-    else { playBeat.store (-1.0); freeBeat = 0; }
+    else playBeat.store (-1.0);
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
         if (nh < (int) hits.size() && (m.isNoteOn() || m.isAllNotesOff() || m.isAllSoundOff()))
-            hits[(size_t) nh++] = { juce::jlimit (0, n, meta.samplePosition), m.isNoteOn() ? m.getNoteNumber() : m.isAllNotesOff() ? -1 : -2, m.getFloatVelocity(), false };
+            hits[(size_t) nh++] = { juce::jlimit (0, n, meta.samplePosition), m.isNoteOn() ? m.getNoteNumber() : m.isAllNotesOff() ? -1 : -2, m.getFloatVelocity(), false, 0 };
     }
     std::stable_sort (hits.begin(), hits.begin() + nh, [] (const Hit& a, const Hit& b) { return a.at < b.at; });
     int pos = 0;
@@ -162,7 +202,7 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         const int at = juce::jlimit (pos, n, h.at);
         if (at > pos) { engine.render (L + pos, R + pos, at - pos); pos = at; }
         if (h.note == -1) engine.allNotesOff(); else if (h.note == -2) engine.allSoundOff();
-        else if (h.gm) engine.noteOnGm (h.note, h.vel); else engine.noteOn (h.note, h.vel);
+        else if (h.gm) engine.noteOnGm (h.note, h.vel, h.src); else engine.noteOn (h.note, h.vel);
     }
     if (pos < n) engine.render (L + pos, R + pos, n - pos);
     if (nch == 1) for (int i = 0; i < n; ++i) L[i] = (L[i] + R[i]) * 0.70710678f;
@@ -299,6 +339,9 @@ void DrumPlayerProcessor::setStateInformation (const void* data, int size)
     bool hasMap = false;   // sessions from 1.0 had no note map: they keep the chromatic map they were made with
     for (auto* e : xml->getChildWithTagNameIterator ("PARAM")) if (e->getStringAttribute ("id") == "noteMap") hasMap = true;
     if (! hasMap) { auto* e = xml->createNewChildElement ("PARAM"); e->setAttribute ("id", "noteMap"); e->setAttribute ("value", 1.0); }
+    bool hasClip = false;   // sessions from 1.0 / 1.1 had no soft clipper: they keep their exact sound (Soft Clip off)
+    for (auto* e : xml->getChildWithTagNameIterator ("PARAM")) if (e->getStringAttribute ("id") == "softClip") hasClip = true;
+    if (! hasClip) { auto* e = xml->createNewChildElement ("PARAM"); e->setAttribute ("id", "softClip"); e->setAttribute ("value", 0.0); }
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     if (auto* kit = xml->getChildByName ("KIT")) { readKit (kit); xml->removeChildElement (kit, true); }
     else readKit (nullptr);
@@ -315,6 +358,7 @@ cw::pat::Clip DrumPlayerProcessor::clipSettings() const
     c.fillBeats = fillBeats[juce::jlimit (0, 3, (int) val (kFillLen))];
     c.bars = bars[juce::jlimit (0, 3, (int) val (kDragLen))];
     c.seed = (uint32_t) juce::jlimit (1, 999, juce::roundToInt (val (kFillSeed)));
+    c.swing = juce::jlimit (0.5f, 0.75f, std::round (val (kSwing) * 100.0f) / 100.0f);
     return c;
 }
 
@@ -333,6 +377,7 @@ juce::String DrumPlayerProcessor::clipTitle() const
     juce::String t = "Drum Player - " + juce::String (cw::pat::patterns()[(size_t) c.pattern].name) + " - " + juce::String (juce::roundToInt (tempo())) + " BPM - "
                    + juce::String (c.bars) + (c.bars == 1 ? " bar" : " bars");
     if (c.fill != cw::pat::kNoFill) t << " - " << cw::pat::fillName (c.fill) << " fill " << (int) c.seed;
+    if (c.swing > 0.505f) t << " - swing " << juce::roundToInt (c.swing * 100.0f);
     return t;
 }
 
@@ -391,29 +436,42 @@ juce::File DrumPlayerProcessor::exportMidi (juce::String& err) const
 
 void DrumPlayerProcessor::renderClip (int part, juce::AudioBuffer<float>& out, double sr)
 {
+    // 1.2.0: the clip is rendered several times in a row and the last pass is kept: it holds the tails of the pass before it, with the
+    // chokes and voice limits applied the way they are when the loop repeats (1.1 added the tail on top, so an open hat ringing over the
+    // loop point was not choked by the closed hat on beat 1). The preview plays exactly these samples from its second pass on.
     const auto c = clipSettings();
     const auto ev = clipEvents();
     const double spb = 60.0 / tempo() * sr;
-    const int N = (int) std::llround (c.bars * 4.0 * spb);
-    const int tail = (int) (sr * 4.0);   // ringing sounds past the end wrap to the start, so the loop is seamless
+    const int N = (int) std::max<juce::int64> (1, std::llround (c.bars * 4.0 * spb));
     cw::dsp::Engine e; e.prepare (sr);
     auto P = currentParams(); e.setParams (P);
     std::array<std::shared_ptr<const cw::dsp::Smp>, cw::dsp::kPads> hold;
     { const juce::SpinLock::ScopedLockType l (userLock); hold = user; }
-    for (int i = 0; i < cw::dsp::kPads; ++i) e.setUser (i, hold[(size_t) i].get());
-    std::vector<float> L ((size_t) (N + tail)), R ((size_t) (N + tail));
-    int pos = 0;
-    auto renderTo = [&] (int at) { if (at > pos) { e.render (L.data() + pos, R.data() + pos, at - pos); pos = at; } };
-    for (const auto& x : ev)
+    double tailSecs = 0.0;   // longest sound at its pitch (decay ignored): that much of the previous passes is heard
+    for (int i = 0; i < cw::dsp::kPads; ++i)
     {
-        const auto h = cw::dsp::gmMap (x.note);
-        if (h.pad < 0 || ! partHasPad (part, h.pad)) continue;
-        renderTo (juce::jlimit (0, N - 1, (int) std::llround (x.beat * spb)));
-        e.trigger (h.pad, x.vel, h.st);
+        e.setUser (i, hold[(size_t) i].get());
+        const auto& pp = P.pad[(size_t) i];
+        const cw::dsp::Smp* s = pp.sound >= cw::dsp::kSounds ? hold[(size_t) i].get() : &cw::dsp::builtIn (pp.sound);
+        if (s != nullptr && s->len() > 1 && partHasPad (part, i)) tailSecs = std::max (tailSecs, s->len() / s->rate / std::pow (2.0, (double) (pp.tune + P.kitTune) / 12.0));
     }
-    renderTo (N + tail);
+    const int passes = 1 + juce::jlimit (1, 64, (int) std::ceil (std::min (tailSecs, 90.0) * sr / N));
+    std::vector<float> L ((size_t) N), R ((size_t) N);
+    for (int k = 0; k < passes; ++k)
+    {
+        int pos = 0;
+        auto renderTo = [&] (int at) { if (at > pos) { e.render (L.data() + pos, R.data() + pos, at - pos); pos = at; } };
+        for (const auto& x : ev)
+        {
+            const auto h = cw::dsp::gmMap (x.note);
+            if (h.pad < 0 || ! partHasPad (part, h.pad)) continue;
+            renderTo (juce::jlimit (0, N - 1, (int) std::llround (x.beat * spb)));
+            e.trigger (h.pad, x.vel, h.st, 1);
+        }
+        renderTo (N);
+    }
     out.setSize (2, N); out.clear();
-    for (int k = 0; k < N + tail; ++k) { out.addSample (0, k % N, L[(size_t) k]); out.addSample (1, k % N, R[(size_t) k]); }
+    out.copyFrom (0, 0, L.data(), N); out.copyFrom (1, 0, R.data(), N);
 }
 
 juce::File DrumPlayerProcessor::exportPart (int part, juce::String& err)
@@ -430,7 +488,9 @@ juce::File DrumPlayerProcessor::exportPart (int part, juce::String& err)
     std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
     if (os == nullptr) { err = "Can't write " + f.getFullPathName(); return {}; }
     juce::WavAudioFormat wav;
-    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+    // 24-bit as before; a loop that peaks over 0 dBFS (Soft Clip off) is written as 32-bit float so its peaks are not cut off
+    const int bits = b.getMagnitude (0, b.getNumSamples()) > 1.0f ? 32 : 24;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, bits, {}, 0));
     if (w == nullptr) { err = "Can't write a WAV at " + juce::String (sr) + " Hz"; return {}; }
     os.release();
     if (! w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples())) { err = "Write failed: " + f.getFullPathName(); return {}; }

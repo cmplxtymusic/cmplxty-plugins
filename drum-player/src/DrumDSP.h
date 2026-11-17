@@ -2,6 +2,9 @@
 // CMPLXTY Drum Player DSP (no JUCE): 8 one-shot pads, 32 voices. Each pad plays a built-in synthesised drum sound or a user sample,
 // with tune (resampling, 4-point Hermite), decay (exponential, -60 dB at the set time; max = the whole sample), equal-power pan,
 // level, velocity and choke groups (a hit fades out every other voice in its group in 5 ms - e.g. closed hat chokes open hat).
+// 1.2.0: 64 voices with a soft steal (when fewer than 4 are free the quietest one fades out in 5 ms, so a busy pattern never hard-cuts a voice),
+// an optional soft clipper on the output (transparent below -3 dBFS, never above -0.3 dBFS), and voices tagged by source so the
+// pattern preview can fade only its own hits when it stops.
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -13,7 +16,7 @@
 
 namespace cw::dsp
 {
-constexpr int kPads = 8, kVoices = 32, kSounds = 16, kSampleSound = 16, kChokeGroups = 4;
+constexpr int kPads = 8, kVoices = 64, kSpareVoices = 4, kSounds = 16, kSampleSound = 16, kChokeGroups = 4;
 constexpr float kDecayFull = 4000.0f;   // decay at its maximum = no envelope (the whole sample plays)
 
 struct Smp
@@ -113,7 +116,18 @@ inline const Smp& builtIn (int i)
 }
 
 struct PadP { int sound = 0; float tune = 0, decay = kDecayFull, pan = 0, levelDb = 0; int choke = 0; };
-struct Params { std::array<PadP, kPads> pad {}; float volumeDb = -3, velSens = 0.7f, kitTune = 0; int baseNote = 36; bool gm = false; };
+struct Params { std::array<PadP, kPads> pad {}; float volumeDb = -3, velSens = 0.7f, kitTune = 0; int baseNote = 36; bool gm = false, softClip = false; };
+
+// 1.2.0 output soft clipper: unity below the knee (-3 dBFS), then a tanh curve that approaches the ceiling (-0.3 dBFS) and never passes it.
+// Stateless (no latency, no memory), so the live output, the preview and the drag-outs go through exactly the same curve.
+constexpr float kClipKnee = 0.70794578f, kClipCeil = 0.96605088f;
+inline float softClip (float x)
+{
+    const float a = std::fabs (x);
+    if (a <= kClipKnee) return x;
+    const float y = kClipKnee + (kClipCeil - kClipKnee) * std::tanh ((a - kClipKnee) / (kClipCeil - kClipKnee));
+    return x < 0 ? -y : y;
+}
 
 // 1.1.0 FPC / General MIDI note map (FL Studio's FPC default layout uses the same notes). The 8 pads keep their roles from 1.0
 // (kick, snare, clap, closed hat, open hat, tom, rim, crash) so every kit still works; the extra GM notes land on the nearest pad,
@@ -157,8 +171,9 @@ public:
     int padForNote (int note) const { if (P.gm) return gmMap (note).pad; const int p = note - P.baseNote; return p >= 0 && p < kPads ? p : -1; }
 
     void noteOn (int note, float vel) { if (P.gm) noteOnGm (note, vel); else trigger (padForNote (note), vel); }
-    void noteOnGm (int note, float vel) { const auto h = gmMap (note); trigger (h.pad, vel, h.st); }   // pattern playback: always GM
-    void trigger (int pad, float vel, float extraSt = 0)
+    void noteOnGm (int note, float vel, int src = 0) { const auto h = gmMap (note); trigger (h.pad, vel, h.st, src); }   // pattern playback: always GM
+    // src tags the voice: 0 = MIDI / pad clicks, 1 = the pattern preview (fadeSource fades only those)
+    void trigger (int pad, float vel, float extraSt = 0, int src = 0)
     {
         if (pad < 0 || vel <= 0) return;
         const auto& pp = P.pad[(size_t) pad];
@@ -167,12 +182,19 @@ public:
         if (s == nullptr || s->len() < 2) return;
         if (pp.choke > 0)
             for (auto& v : voices) if (v.on && P.pad[(size_t) v.pad].choke == pp.choke) v.choke (sr);
-        Voice* slot = nullptr;
-        for (auto& v : voices) if (! v.on) { slot = &v; break; }
-        if (slot == nullptr) { slot = &voices[0]; for (auto& v : voices) if (v.age < slot->age) slot = &v; }   // steal the oldest
+        Voice* slot = nullptr; int nfree = 0;
+        for (auto& v : voices) if (! v.on) { if (slot == nullptr) slot = &v; ++nfree; }
+        if (nfree <= kSpareVoices)   // running low: the quietest playing voice fades out (5 ms) so a slot is free before it is needed
+        {
+            Voice* q = nullptr;
+            for (auto& v : voices) if (v.on && v.fade <= 0 && (q == nullptr || v.loud() < q->loud())) q = &v;
+            if (q != nullptr) q->choke (sr);
+        }
+        if (slot == nullptr)   // last resort (more than 60 hits inside 5 ms): the quietest voice is cut
+        { slot = &voices[0]; for (auto& v : voices) if (v.loud() < slot->loud()) slot = &v; ++hardSteals; }
         auto& v = *slot;
         v = Voice {};
-        v.on = true; v.pad = pad; v.s = s; v.pos = 0; v.age = ++clock;
+        v.on = true; v.pad = pad; v.s = s; v.pos = 0; v.age = ++clock; v.src = src;
         v.inc = s->rate / sr * std::pow (2.0, (double) (pp.tune + P.kitTune + extraSt) / 12.0);
         const float g = std::pow (10.0f, pp.levelDb / 20.0f) * (1.0f - P.velSens + P.velSens * std::clamp (vel, 0.0f, 1.0f));
         const float th = (std::clamp (pp.pan, -1.0f, 1.0f) + 1.0f) * 0.78539816f;
@@ -181,6 +203,7 @@ public:
     }
     void allSoundOff() { for (auto& v : voices) v.on = false; activeVoices.store (0); }
     void allNotesOff() { for (auto& v : voices) if (v.on) v.choke (sr); }
+    void fadeSource (int src, double seconds) { for (auto& v : voices) if (v.on && v.src == src) v.choke (sr, seconds); }
 
     void render (float* L, float* R, int n)
     {
@@ -205,7 +228,9 @@ public:
         const float tg = std::pow (10.0f, P.volumeDb / 20.0f);
         if (vol < 0) vol = tg;
         float pk = 0;
-        for (int i = 0; i < n; ++i) { vol += (tg - vol) * 0.002f; L[i] *= vol; R[i] *= vol; pk = std::max ({ pk, std::fabs (L[i]), std::fabs (R[i]) }); }
+        for (int i = 0; i < n; ++i) { vol += (tg - vol) * 0.002f; L[i] *= vol; R[i] *= vol; }
+        if (P.softClip) for (int i = 0; i < n; ++i) { L[i] = softClip (L[i]); R[i] = softClip (R[i]); }
+        for (int i = 0; i < n; ++i) pk = std::max ({ pk, std::fabs (L[i]), std::fabs (R[i]) });
         activeVoices.store (act, std::memory_order_relaxed);
         outPeak.store (std::max (pk, outPeak.load (std::memory_order_relaxed) * 0.9f), std::memory_order_relaxed);
     }
@@ -213,12 +238,14 @@ public:
     std::atomic<int> activeVoices { 0 };
     std::atomic<float> outPeak { 0 };
     std::array<std::atomic<int>, kPads> hits {};   // trigger counters, for the display's pad flash
+    int hardSteals = 0;                            // voices cut because all 64 were busy (tests)
 
 private:
     struct Voice
     {
-        bool on = false; int pad = 0; const Smp* s = nullptr; double pos = 0, inc = 1; float gL = 1, gR = 1, env = 1, envMul = 1, fade = 0, fadeStep = 0; uint32_t age = 0;
-        void choke (double sr) { if (fade > 0) return; fade = 1; fadeStep = std::max (env, 1e-3f) / (float) (0.005 * sr); }
+        bool on = false; int pad = 0, src = 0; const Smp* s = nullptr; double pos = 0, inc = 1; float gL = 1, gR = 1, env = 1, envMul = 1, fade = 0, fadeStep = 0; uint32_t age = 0;
+        void choke (double sr, double seconds = 0.005) { if (fade > 0) return; fade = 1; fadeStep = std::max (env, 1e-3f) / (float) (seconds * sr); }
+        float loud() const { return on ? env * std::max (gL, gR) : -1.0f; }
     };
     static float herm (const std::vector<float>& x, int k, int len, float f)
     {
