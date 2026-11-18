@@ -83,3 +83,8 @@ target_link_libraries(DrumPlayerScreenshot PRIVATE CWAssets juce::juce_audio_uti
 target_compile_definitions(DrumPlayerScreenshot PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_STANDALONE_APPLICATION=0 CW_VERSION_STRING="${PROJECT_VERSION}")
 set_target_properties(DrumPlayerScreenshot PROPERTIES EXCLUDE_FROM_ALL TRUE)
+# 1.2.0: the tests count heap allocations and mutex locks inside processBlock (Linux / GNU ld: calls are routed through counting wrappers)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(DrumPlayerScreenshot PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=pthread_mutex_lock)
+    target_compile_definitions(DrumPlayerScreenshot PRIVATE DP_COUNT_ALLOCS=1)
+endif()

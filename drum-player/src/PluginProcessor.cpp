@@ -39,10 +39,13 @@ const cw::PDef kParams[] = {
     { "bpm",      "Tempo",           'f', 0.0f, 250.0f, 0.1f, 1.0f, 0.0f, "BPM-host" },
     { "softClip", "Soft Clip",       'b', 0, 1, 1, 1, 1.0f, "" },
     { "swing",    "Swing",           'f', 0.5f, 0.75f, 0.01f, 1.0f, 0.5f, "%" },
+    { "fillDensity", "Fill Density", 'f', 0.1f, 1.0f, 0.01f, 1.0f, 1.0f, "%" },
+    { "fillEnd",  "Fill Ending",     'c', 0, 3, 1, 1, 0.0f, "", "Crash|Ride|Open Hat|None" },
 };
 constexpr int kPerPad = 6, kVolume = 8 * kPerPad, kVelSens = kVolume + 1, kKitTune = kVolume + 2, kBaseNote = kVolume + 3, kNoteMap = kVolume + 4,
               kPattern = kVolume + 5, kFillStyle = kVolume + 6, kFillLen = kVolume + 7, kDragLen = kVolume + 8, kFillSeed = kVolume + 9, kPatPlay = kVolume + 10,
-              kBpm = kVolume + 11, kSoftClip = kVolume + 12, kSwing = kVolume + 13, kNumParams = kVolume + 14;
+              kBpm = kVolume + 11, kSoftClip = kVolume + 12, kSwing = kVolume + 13,
+              kFillDensity = kVolume + 14, kFillEnd = kVolume + 15, kNumParams = kVolume + 16;
 static_assert (kPatPlay == DrumPlayerProcessor::kParamPatPlay && kBpm == DrumPlayerProcessor::kParamBpm && kSoftClip == DrumPlayerProcessor::kParamSoftClip, "header indices");
 // pattern / loop settings are not part of a kit: loading a kit preset keeps them
 bool notInKit (const juce::String& id) { for (int i = kNoteMap; i < kNumParams; ++i) if (id == kParams[i].id) return true; return false; }
@@ -59,9 +62,10 @@ DrumPlayerProcessor::DrumPlayerProcessor()
     for (auto& d : kParams) raw.push_back (apvts.getRawParameterValue (d.id));
     formats.registerBasicFormats();
     presets.saveExtra = [this] (juce::XmlElement& x) { writeKit (x); };
-    presets.loadExtra = [this] (const juce::XmlElement* x) { readKit (x); };
+    presets.loadExtra = [this] (const juce::XmlElement* x) { readKit (x); snapshotKit ({}); };
     presets.keep = notInKit;
     clipEv.reserve (8192); pvClip.reserve (8192); pvEv.reserve (8192);
+    snapshotKit ("Init");
 }
 
 DrumPlayerProcessor::~DrumPlayerProcessor() = default;
@@ -114,6 +118,12 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         const int e = uiPads.q[(size_t) (uiPads.r & 63)].load();
         engine.trigger (e & 15, (float) (e >> 8) / 127.0f);
     }
+    if (const int w = audW.load (std::memory_order_acquire); audR != w)   // sound-swap audition: only the newest one plays
+    {
+        const auto a = aud[(size_t) ((w - 1) & 15)]; audR = w;
+        engine.fadeSource (2, 0.01);
+        if (a.pad >= 0) engine.triggerWith (a.pad, a.pp, 0.9f, 0.0f, 2);
+    }
     if (nch <= 0 || n <= 0) { midi.clear(); return; }
     if ((int) scratchR.size() < n) { buffer.clear(); midi.clear(); return; }
     float* L = buffer.getWritePointer (0);
@@ -151,11 +161,12 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     {
         // events on whole samples of the loop, the same rounding as renderClip (llround (beat * samples per beat)), so the preview is the drag-out
         const juce::int64 N = std::max<juce::int64> (1, std::llround (cs.bars * 4.0 * spb));
-        const juce::int64 key = ((juce::int64) (cs.pattern | (cs.fill << 6) | (cs.fillBeats << 10) | (cs.bars << 14) | ((int) cs.seed << 18)) * 32 + juce::roundToInt (cs.swing * 100.0f) - 50) * 8 + pvPart;
-        if (key != pvKey || N != pvN)
+        const juce::int64 key = clipKey (cs) * 8 + pvPart;
+        if (key != pvKey || N != pvN || stepVer.load() != pvVer)
         {
+            // a step edit rebuilds the events but keeps the place in the loop: sounding voices are untouched, the next hits follow the edit
             if (pvN > 0 && N != pvN) pvPos = (juce::int64) ((double) pvPos * (double) N / (double) pvN);   // tempo change: keep the place in the bar
-            cw::pat::build (cs, pvClip); pvEv.clear();
+            buildEvents (cs, pvClip, &pvVer); pvEv.clear();
             for (const auto& e : pvClip)
                 if (const auto h = cw::dsp::gmMap (e.note); h.pad >= 0 && partHasPad (pvPart, h.pad))
                     pvEv.push_back ({ juce::jlimit<juce::int64> (0, N - 1, std::llround (e.beat * spb)), e.note, e.vel });
@@ -173,8 +184,8 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     }
     else if (val (kPatPlay) > 0.5f && hostPlaying)   // PLAY WITH HOST: locked to the host's song position
     {
-        const juce::int64 key = (juce::int64) (cs.pattern | (cs.fill << 6) | (cs.fillBeats << 10) | (cs.bars << 14) | ((int) cs.seed << 18)) * 32 + juce::roundToInt (cs.swing * 100.0f) - 50;
-        if (key != lastClipKey) { cw::pat::build (cs, clipEv); lastClipKey = key; }
+        const juce::int64 key = clipKey (cs);
+        if (key != lastClipKey || stepVer.load() != clipVer) { buildEvents (cs, clipEv, &clipVer); lastClipKey = key; }
         const double beatsPerSample = 1.0 / spb, len = cs.bars * 4.0;
         for (int pass = 0; pass < 2; ++pass)   // the block may run past the clip end once
         {
@@ -194,7 +205,7 @@ void DrumPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         if (nh < (int) hits.size() && (m.isNoteOn() || m.isAllNotesOff() || m.isAllSoundOff()))
             hits[(size_t) nh++] = { juce::jlimit (0, n, meta.samplePosition), m.isNoteOn() ? m.getNoteNumber() : m.isAllNotesOff() ? -1 : -2, m.getFloatVelocity(), false, 0 };
     }
-    std::stable_sort (hits.begin(), hits.begin() + nh, [] (const Hit& a, const Hit& b) { return a.at < b.at; });
+    for (int i = 1; i < nh; ++i) { const Hit h = hits[(size_t) i]; int j = i; while (j > 0 && h.at < hits[(size_t) (j - 1)].at) { hits[(size_t) j] = hits[(size_t) (j - 1)]; --j; } hits[(size_t) j] = h; }   // stable, no allocation (std::stable_sort may allocate)
     int pos = 0;
     for (int k = 0; k < nh; ++k)
     {
@@ -329,6 +340,22 @@ void DrumPlayerProcessor::getStateInformation (juce::MemoryBlock& dest)
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     if (uiWidth.load() > 0 && uiHeight.load() > 0) { xml->setAttribute ("uiW", uiWidth.load()); xml->setAttribute ("uiH", uiHeight.load()); }
     writeKit (*xml->createNewChildElement ("KIT"));
+    // 1.2.0: edited patterns (only the edited ones; hex, one byte per step) and the kit the pads were swapped from
+    auto* st = xml->createNewChildElement ("STEPS");
+    for (int p = 0; p < kNumPatterns; ++p)
+        if (patternEdited (p))
+        {
+            uint8_t g[cw::pat::kGrid]; getGrid (p, g);
+            auto* e = st->createNewChildElement ("PAT"); e->setAttribute ("index", p); e->setAttribute ("data", juce::String::toHexString (g, cw::pat::kGrid, 0));
+        }
+    auto* kr = xml->createNewChildElement ("KITREF");
+    kr->setAttribute ("name", kitRefName());
+    for (int i = 0; i < cw::dsp::kPads; ++i)
+    {
+        const auto& q = kitRef[(size_t) i]; auto* e = kr->createNewChildElement ("PAD"); e->setAttribute ("index", i);
+        e->setAttribute ("sound", q.sound); e->setAttribute ("tune", q.tune); e->setAttribute ("decay", q.decay); e->setAttribute ("pan", q.pan);
+        e->setAttribute ("level", q.levelDb); e->setAttribute ("choke", q.choke);
+    }
     copyXmlToBinary (*xml, dest);
 }
 
@@ -345,7 +372,45 @@ void DrumPlayerProcessor::setStateInformation (const void* data, int size)
     uiWidth.store (xml->getIntAttribute ("uiW", 0)); uiHeight.store (xml->getIntAttribute ("uiH", 0));
     if (auto* kit = xml->getChildByName ("KIT")) { readKit (kit); xml->removeChildElement (kit, true); }
     else readKit (nullptr);
+    // 1.2.0 step edits: a session without them (1.0 / 1.1 / the first 1.2 builds) plays the factory patterns, exactly as before
+    stepVer.fetch_add (1);   // (no endStepWrite here: loading a session must not mark it as changed)
+    for (auto& e : edited) e.store (false);
+    if (auto* st = xml->getChildByName ("STEPS"))
+    {
+        for (auto* e : st->getChildWithTagNameIterator ("PAT"))
+        {
+            const int p = e->getIntAttribute ("index", -1);
+            juce::MemoryBlock mb; mb.loadFromHexString (e->getStringAttribute ("data"));
+            if (p < 0 || p >= kNumPatterns || (int) mb.getSize() != cw::pat::kGrid) continue;
+            const auto* d = static_cast<const uint8_t*> (mb.getData());
+            for (int k = 0; k < cw::pat::kGrid; ++k) grid[(size_t) (p * cw::pat::kGrid + k)].store ((uint8_t) std::min<int> (d[k], 100));
+            edited[(size_t) p].store (true);
+        }
+        xml->removeChildElement (st, true);
+    }
+    stepVer.fetch_add (1);
+    std::unique_ptr<juce::XmlElement> ref;
+    if (auto* kr = xml->getChildByName ("KITREF")) { ref.reset (new juce::XmlElement (*kr)); xml->removeChildElement (kr, true); }
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    if (ref != nullptr)
+    {
+        kitRefTitle = ref->getStringAttribute ("name", "Kit");
+        for (auto* e : ref->getChildWithTagNameIterator ("PAD"))
+            if (const int i = e->getIntAttribute ("index", -1); i >= 0 && i < cw::dsp::kPads)
+            {
+                auto& q = kitRef[(size_t) i];
+                q.sound = juce::jlimit (0, cw::dsp::kSampleSound, e->getIntAttribute ("sound")); q.tune = (float) e->getDoubleAttribute ("tune");
+                q.decay = (float) e->getDoubleAttribute ("decay", cw::dsp::kDecayFull); q.pan = (float) e->getDoubleAttribute ("pan");
+                q.levelDb = (float) e->getDoubleAttribute ("level"); q.choke = juce::jlimit (0, cw::dsp::kChokeGroups, e->getIntAttribute ("choke"));
+            }
+    }
+    else   // older sessions: the factory kit named in the session, else the pads as they are
+    {
+        const auto name = presets.currentName(); int k = -1;
+        if (! (bool) apvts.state.getProperty ("presetUser", false)) for (int i = 0; i < numKits(); ++i) if (kitName (i) == name) k = i;
+        if (k >= 0) { kitRefTitle = name; for (int i = 0; i < cw::dsp::kPads; ++i) kitRef[(size_t) i] = factoryPad (k, i); }
+        else snapshotKit (name);
+    }
 }
 
 // ---- 1.1.0 patterns / fills / drag-outs
@@ -359,7 +424,220 @@ cw::pat::Clip DrumPlayerProcessor::clipSettings() const
     c.bars = bars[juce::jlimit (0, 3, (int) val (kDragLen))];
     c.seed = (uint32_t) juce::jlimit (1, 999, juce::roundToInt (val (kFillSeed)));
     c.swing = juce::jlimit (0.5f, 0.75f, std::round (val (kSwing) * 100.0f) / 100.0f);
+    c.density = juce::jlimit (0.1f, 1.0f, std::round (val (kFillDensity) * 100.0f) / 100.0f);
+    c.ending = juce::jlimit (0, 3, (int) val (kFillEnd));
     return c;
+}
+
+juce::int64 DrumPlayerProcessor::clipKey (const cw::pat::Clip& c) const
+{
+    juce::int64 k = c.pattern;
+    k = k * 16 + c.fill; k = k * 16 + c.fillBeats; k = k * 16 + c.bars; k = k * 1024 + (juce::int64) c.seed;
+    k = k * 32 + juce::roundToInt (c.swing * 100.0f) - 50; k = k * 128 + juce::roundToInt (c.density * 100.0f); k = k * 4 + c.ending;
+    return k;
+}
+
+// the clip with this pattern's step edits (any thread: no locks, no allocation beyond what `out` has reserved)
+void DrumPlayerProcessor::buildEvents (cw::pat::Clip c, std::vector<cw::pat::Ev>& out, int* version) const
+{
+    uint8_t g[cw::pat::kGrid];
+    const int v0 = stepVer.load (std::memory_order_acquire);
+    const bool ed = patternEdited (c.pattern);
+    if (ed) for (int k = 0; k < cw::pat::kGrid; ++k) g[k] = grid[(size_t) (c.pattern * cw::pat::kGrid + k)].load (std::memory_order_relaxed);
+    c.steps = ed ? g : nullptr;
+    cw::pat::build (c, out);
+    // a write in progress (odd) or one that landed while copying: report a stale version so the caller rebuilds on its next pass
+    if (version != nullptr) *version = ((v0 & 1) != 0 || stepVer.load (std::memory_order_acquire) != v0) ? -1 : v0;
+}
+
+// ---- 1.2.0 step editor (message thread)
+void DrumPlayerProcessor::endStepWrite()
+{
+    stepVer.fetch_add (1);
+    updateHostDisplay (juce::AudioProcessorListener::ChangeDetails().withNonParameterStateChanged (true));   // the host marks the project as changed
+}
+
+int DrumPlayerProcessor::stepAt (int p, int lane, int step) const
+{
+    if (p < 0 || p >= kNumPatterns || lane < 0 || lane >= cw::pat::kLanes || step < 0 || step >= cw::pat::kSteps) return 0;
+    if (patternEdited (p)) return grid[(size_t) (p * cw::pat::kGrid + lane * cw::pat::kSteps + step)].load();
+    uint8_t g[cw::pat::kGrid]; cw::pat::factoryGrid (p, g); return g[lane * cw::pat::kSteps + step];
+}
+
+void DrumPlayerProcessor::getGrid (int p, uint8_t* g) const
+{
+    if (p < 0 || p >= kNumPatterns) { std::fill (g, g + cw::pat::kGrid, (uint8_t) 0); return; }
+    if (! patternEdited (p)) { cw::pat::factoryGrid (p, g); return; }
+    for (int k = 0; k < cw::pat::kGrid; ++k) g[k] = grid[(size_t) (p * cw::pat::kGrid + k)].load();
+}
+
+void DrumPlayerProcessor::setGrid (int p, const uint8_t* g)
+{
+    if (p < 0 || p >= kNumPatterns) return;
+    beginStepWrite();
+    for (int k = 0; k < cw::pat::kGrid; ++k) grid[(size_t) (p * cw::pat::kGrid + k)].store ((uint8_t) std::min<int> (g[k], 100));
+    edited[(size_t) p].store (true);
+    endStepWrite();
+}
+
+void DrumPlayerProcessor::setStep (int p, int lane, int step, int vel)
+{
+    if (p < 0 || p >= kNumPatterns || lane < 0 || lane >= cw::pat::kLanes || step < 0 || step >= cw::pat::kSteps) return;
+    uint8_t g[cw::pat::kGrid]; getGrid (p, g);
+    g[lane * cw::pat::kSteps + step] = (uint8_t) juce::jlimit (0, 100, vel);
+    setGrid (p, g);
+}
+
+void DrumPlayerProcessor::clearPattern (int p) { uint8_t g[cw::pat::kGrid] {}; setGrid (p, g); }
+void DrumPlayerProcessor::resetPattern (int p)
+{
+    if (p < 0 || p >= kNumPatterns) return;
+    beginStepWrite(); edited[(size_t) p].store (false); endStepWrite();
+}
+
+juce::String DrumPlayerProcessor::patternLabel() const
+{
+    const int p = clipSettings().pattern;
+    return juce::String (cw::pat::patterns()[(size_t) p].name) + (patternEdited (p) ? " *" : "");
+}
+
+juce::File DrumPlayerProcessor::patternDir() { return cw::upd::dataDir().getChildFile ("Patterns"); }
+juce::Array<juce::File> DrumPlayerProcessor::patternFiles()
+{
+    auto files = patternDir().findChildFiles (juce::File::findFiles, false, juce::String ("*") + kPatternExt);
+    std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+    return files;
+}
+
+namespace { const char* const kPatternIds[] = { "swing", "fillStyle", "fillLen", "fillSeed", "fillDensity", "fillEnd" }; }
+
+bool DrumPlayerProcessor::savePattern (const juce::File& f, const juce::String& name)
+{
+    const int p = clipSettings().pattern;
+    juce::XmlElement x ("CMPLXTY_DRUM_PATTERN");
+    x.setAttribute ("version", CW_VERSION_STRING); x.setAttribute ("name", name); x.setAttribute ("base", cw::pat::patterns()[(size_t) p].name);
+    uint8_t g[cw::pat::kGrid]; getGrid (p, g);
+    x.setAttribute ("steps", juce::String::toHexString (g, cw::pat::kGrid, 0));
+    for (auto* id : kPatternIds)
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (id)))
+        { auto* e = x.createNewChildElement ("PARAM"); e->setAttribute ("id", id); e->setAttribute ("value", (double) r->convertFrom0to1 (r->getValue())); }
+    f.getParentDirectory().createDirectory();
+    return x.writeTo (f);
+}
+
+bool DrumPlayerProcessor::loadPattern (const juce::File& f)
+{
+    if (! f.existsAsFile() || f.getSize() > 1024 * 1024) return false;
+    auto x = juce::XmlDocument::parse (f);
+    if (x == nullptr || ! x->hasTagName ("CMPLXTY_DRUM_PATTERN")) return false;
+    juce::MemoryBlock mb; mb.loadFromHexString (x->getStringAttribute ("steps"));
+    if ((int) mb.getSize() != cw::pat::kGrid) return false;
+    undoManager.beginNewTransaction ("Load pattern");
+    for (auto* e : x->getChildWithTagNameIterator ("PARAM"))
+        for (auto* id : kPatternIds)
+            if (e->getStringAttribute ("id") == id)
+                if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (id)))
+                {
+                    const auto v = (float) e->getDoubleAttribute ("value");
+                    if (std::isfinite (v)) { r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (v)); r->endChangeGesture(); }
+                }
+    setGrid (clipSettings().pattern, static_cast<const uint8_t*> (mb.getData()));
+    return true;
+}
+
+// ---- 1.2.0 sound swap (message thread)
+int DrumPlayerProcessor::numKits() { return (int) cw::factoryPresets().size(); }
+juce::String DrumPlayerProcessor::kitName (int k) { return k >= 0 && k < numKits() ? juce::String (cw::factoryPresets()[(size_t) k].name) : juce::String(); }
+
+namespace
+{
+float kitValue (int kit, const char* id)   // a factory kit's value (real units): its override, else the default
+{
+    for (auto& v : cw::factoryPresets()[(size_t) kit].values) if (std::strcmp (v.first, id) == 0) return v.second;
+    for (auto& d : kParams) if (std::strcmp (d.id, id) == 0) return d.def;
+    return 0.0f;
+}
+}
+
+cw::dsp::PadP DrumPlayerProcessor::factoryPad (int kit, int pad)
+{
+    cw::dsp::PadP q;
+    if (kit < 0 || kit >= numKits() || pad < 0 || pad >= cw::dsp::kPads) return q;
+    const int b = pad * kPerPad;
+    q.sound = juce::jlimit (0, cw::dsp::kSampleSound, (int) kitValue (kit, kParams[b].id));
+    q.tune = kitValue (kit, kParams[b + 1].id);
+    q.decay = kitValue (kit, kParams[b + 2].id); q.pan = kitValue (kit, kParams[b + 3].id);
+    q.levelDb = kitValue (kit, kParams[b + 4].id); q.choke = (int) kitValue (kit, kParams[b + 5].id);
+    return q;
+}
+
+cw::dsp::PadP DrumPlayerProcessor::kitPad (int kit, int pad) const
+{
+    auto q = factoryPad (kit, pad);
+    // keep the pitch it has in its own kit: its tune plus the difference between the two kits' KIT TUNE
+    if (kit >= 0 && kit < numKits()) q.tune = juce::jlimit (-24.0f, 24.0f, q.tune + kitValue (kit, "kitTune") - val (kKitTune));
+    return q;
+}
+
+void DrumPlayerProcessor::setPadParams (int pad, const cw::dsp::PadP& q, bool withPanChoke)
+{
+    const int b = pad * kPerPad;
+    auto set = [this] (int i, float real)
+    {
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (kParams[i].id)))
+        { r->beginChangeGesture(); r->setValueNotifyingHost (r->convertTo0to1 (real)); r->endChangeGesture(); }
+    };
+    set (b, (float) q.sound); set (b + 1, q.tune); set (b + 2, q.decay); set (b + 4, q.levelDb);
+    if (withPanChoke) { set (b + 3, q.pan); set (b + 5, (float) q.choke); }
+}
+
+void DrumPlayerProcessor::swapFromKit (int pad, int kit, int srcPad)
+{
+    if (pad < 0 || pad >= cw::dsp::kPads || kit < 0 || kit >= numKits() || srcPad < 0 || srcPad >= cw::dsp::kPads) return;
+    const auto q = kitPad (kit, srcPad);
+    if (q.sound >= cw::dsp::kSounds) return;   // factory kits only use built-in sounds
+    undoManager.beginNewTransaction ("Swap pad " + juce::String (pad + 1) + " sound");
+    setPadParams (pad, q, false);
+}
+
+void DrumPlayerProcessor::swapBuiltIn (int pad, int sound)
+{
+    if (pad < 0 || pad >= cw::dsp::kPads || sound < 0 || sound >= cw::dsp::kSounds) return;
+    undoManager.beginNewTransaction ("Swap pad " + juce::String (pad + 1) + " sound");
+    cw::dsp::PadP q; q.sound = sound; q.levelDb = val (pad * kPerPad + 4);   // the plain sound, at the pad's level
+    setPadParams (pad, q, false);
+}
+
+void DrumPlayerProcessor::resetPadToKit (int pad)
+{
+    if (pad < 0 || pad >= cw::dsp::kPads) return;
+    undoManager.beginNewTransaction ("Reset pad " + juce::String (pad + 1) + " to kit");
+    setPadParams (pad, kitRef[(size_t) pad], true);
+}
+
+cw::dsp::PadP DrumPlayerProcessor::kitRefPad (int pad) const { return pad >= 0 && pad < cw::dsp::kPads ? kitRef[(size_t) pad] : cw::dsp::PadP {}; }
+
+bool DrumPlayerProcessor::padSwapped (int pad) const
+{
+    if (pad < 0 || pad >= cw::dsp::kPads) return false;
+    const auto now = currentParams().pad[(size_t) pad]; const auto& r = kitRef[(size_t) pad];
+    return now.sound != r.sound || std::abs (now.tune - r.tune) > 0.05f || std::abs (now.decay - r.decay) > 0.5f || std::abs (now.levelDb - r.levelDb) > 0.05f
+        || std::abs (now.pan - r.pan) > 0.001f || now.choke != r.choke;
+}
+
+void DrumPlayerProcessor::snapshotKit (const juce::String& name)
+{
+    const auto P = currentParams();
+    for (int i = 0; i < cw::dsp::kPads; ++i) kitRef[(size_t) i] = P.pad[(size_t) i];
+    kitRefTitle = name;   // empty = the preset being loaded (its name is set right after loadExtra)
+}
+
+void DrumPlayerProcessor::audition (int pad, cw::dsp::PadP q)
+{
+    q.choke = 0;   // an audition never chokes what is playing
+    const int w = audW.load();
+    aud[(size_t) (w & 15)] = { q, pad };
+    audW.store (w + 1, std::memory_order_release);
 }
 
 void DrumPlayerProcessor::newFill()
@@ -374,9 +652,10 @@ void DrumPlayerProcessor::newFill()
 juce::String DrumPlayerProcessor::clipTitle() const
 {
     const auto c = clipSettings();
-    juce::String t = "Drum Player - " + juce::String (cw::pat::patterns()[(size_t) c.pattern].name) + " - " + juce::String (juce::roundToInt (tempo())) + " BPM - "
+    juce::String t = "Drum Player - " + juce::String (cw::pat::patterns()[(size_t) c.pattern].name) + (patternEdited (c.pattern) ? " (edit)" : "") + " - " + juce::String (juce::roundToInt (tempo())) + " BPM - "
                    + juce::String (c.bars) + (c.bars == 1 ? " bar" : " bars");
     if (c.fill != cw::pat::kNoFill) t << " - " << cw::pat::fillName (c.fill) << " fill " << (int) c.seed;
+    if (c.fill != cw::pat::kNoFill && c.density < 0.995f) t << " density " << juce::roundToInt (c.density * 100.0f);
     if (c.swing > 0.505f) t << " - swing " << juce::roundToInt (c.swing * 100.0f);
     return t;
 }

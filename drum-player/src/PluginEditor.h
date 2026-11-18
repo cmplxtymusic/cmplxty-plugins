@@ -68,12 +68,15 @@ struct NoFocusCombo : juce::ComboBox
 class PopupOverlay : public juce::Component
 {
 public:
-    struct Item { juce::String text; std::function<void()> action; bool enabled = true, ticked = false, separatorAbove = false; };
+    // 1.2.0: hover runs when the item is highlighted (mouse or arrow keys) - the sound-swap menu auditions with it; onClose when the menu goes
+    struct Item { juce::String text; std::function<void()> action; bool enabled = true, ticked = false, separatorAbove = false; std::function<void()> hover = {}; };
+    std::function<void()> onClose;
     PopupOverlay();
     void show (juce::Point<int> where, std::vector<Item> newItems);
     void dismiss();
     bool isOpen() const { return open; }
     juce::StringArray itemTexts() const { juce::StringArray s; for (auto& i : items) s.add (i.text); return s; }   // test hook
+    bool hoverItem (const juce::String& textPart) { for (size_t i = 0; i < items.size(); ++i) if (items[i].enabled && items[i].text.contains (textPart)) { setHover ((int) i); return true; } return false; }   // test hook
     bool activate (const juce::String& textPart) { for (size_t i = 0; i < items.size(); ++i) if (items[i].enabled && items[i].text.contains (textPart)) { trigger ((int) i); return true; } return false; }
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -86,6 +89,7 @@ private:
     int itemAt (juce::Point<int>) const;
     juce::Rectangle<int> rowBounds (int i) const;
     void trigger (int i);
+    void setHover (int i);
     std::vector<Item> items;
     juce::Rectangle<int> panel;
     std::vector<juce::Rectangle<int>> rects;   // row of every item (long menus flow into several columns)
@@ -120,7 +124,15 @@ class Panel;
 std::unique_ptr<juce::Component> makeDisplay (DrumPlayerProcessor&, Panel&);
 void demoDisplay (juce::Component*);
 juce::File exportChip (juce::Component*, int chip, juce::String& err);
-void clickPreview (juce::Component*, int chip);   // test hook: chip < 0 = the PLAY / STOP button, else a click on that chip   // test hook: the file a drag-out chip would drag (0 = MIDI, 1.. = audio parts)   // screenshot helper: fill the display with demo data
+void clickPreview (juce::Component*, int chip);
+// 1.2.0 test hooks: the step editor (gesture = press a step, optionally drag dy pixels, release) and the sound-swap menu
+void stepEditorOpen (juce::Component* display, bool open);
+bool stepEditorIsOpen (juce::Component* display);
+void stepEditorGesture (juce::Component* display, int lane, int step, int dy);
+void stepEditorButton (juce::Component* display, int button);   // 0 clear 1 reset 2 save 3 load 4 close
+void stepEditorStepMenu (juce::Component* display, int lane, int step);
+void stepEditorLaneMenu (juce::Component* display, int lane);
+void padSwapMenu (juce::Component* display, Panel&, DrumPlayerProcessor&, int pad);   // test hook: chip < 0 = the PLAY / STOP button, else a click on that chip   // test hook: the file a drag-out chip would drag (0 = MIDI, 1.. = audio parts)   // screenshot helper: fill the display with demo data
 
 // The whole interface, laid out at a fixed base size and scaled by the editor (so the window can be resized freely).
 class Panel final : public juce::Component, private juce::Timer

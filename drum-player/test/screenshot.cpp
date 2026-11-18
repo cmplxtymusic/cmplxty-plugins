@@ -4,6 +4,27 @@
 #include <random>
 #include <cmath>
 
+#if DP_COUNT_ALLOCS
+// 1.2.0: heap allocations and mutex locks made inside processBlock (counted only while gCount is set, on the thread that set it)
+#include <pthread.h>
+static std::atomic<bool> gCount { false };
+static std::atomic<long> gAllocs { 0 }, gLocks { 0 };
+static thread_local bool tCount = false;
+extern "C" {
+void* __real_malloc (size_t); void* __real_calloc (size_t, size_t); void* __real_realloc (void*, size_t); int __real_pthread_mutex_lock (pthread_mutex_t*);
+void* __wrap_malloc (size_t n) { if (tCount) gAllocs.fetch_add (1); return __real_malloc (n); }
+void* __wrap_calloc (size_t a, size_t b) { if (tCount) gAllocs.fetch_add (1); return __real_calloc (a, b); }
+void* __wrap_realloc (void* p, size_t n) { if (tCount) gAllocs.fetch_add (1); return __real_realloc (p, n); }
+int __wrap_pthread_mutex_lock (pthread_mutex_t* m) { if (tCount) gLocks.fetch_add (1); return __real_pthread_mutex_lock (m); }
+}
+void* operator new (size_t n) { if (tCount) gAllocs.fetch_add (1); if (void* p = __real_malloc (n == 0 ? 1 : n)) return p; throw std::bad_alloc(); }
+void* operator new[] (size_t n) { return operator new (n); }
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, size_t) noexcept { std::free (p); }
+#endif
+
 namespace
 {
 int fails = 0;
@@ -66,8 +87,8 @@ int procTests()
     {
         DrumPlayerProcessor proc; proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
         check (proc.getTotalNumInputChannels() == 0 && proc.getTotalNumOutputChannels() == 2 && proc.acceptsMidi() && proc.getLatencySamples() == 0, "instrument: no audio in, stereo out, MIDI in, zero latency");
-        check (proc.getParameters().size() == 62 && std::fabs (v (proc, "swing") - 0.5f) < 1e-6 && v (proc, "noteMap") == 0 && v (proc, "patPlay") == 0 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1
-               && v (proc, "bpm") == 0 && v (proc, "softClip") == 1, "62 parameters with defaults (kit, hats choke, GM map, pattern stopped, tempo Host, soft clip on, swing straight)");
+        check (proc.getParameters().size() == 64 && v (proc, "fillDensity") == 1.0f && v (proc, "fillEnd") == 0 && std::fabs (v (proc, "swing") - 0.5f) < 1e-6 && v (proc, "noteMap") == 0 && v (proc, "patPlay") == 0 && v (proc, "p1Sound") == 1 && v (proc, "p8Sound") == 10 && v (proc, "p5Choke") == 1 && v (proc, "baseNote") == 1
+               && v (proc, "bpm") == 0 && v (proc, "softClip") == 1, "64 parameters with defaults (kit, hats choke, GM map, pattern stopped, tempo Host, soft clip on, swing straight, fill density 100 %, crash ending)");
         set (proc, "noteMap", 1);   // the 1.0 tests below use the chromatic map
         check (txt (proc, "p1Pan", -0.5f) == "L50" && txt (proc, "p1Pan", 0.0f) == "C" && txt (proc, "p1Decay", 4000.0f) == "Full" && txt (proc, "p1Sound", 16) == "Sample", "pan / decay / sound text");
         auto y = render (proc, 20, {});
@@ -391,6 +412,187 @@ int procTests()
         y = render (e, 70, ev);
         check (e.dspEngine().hardSteals == 0, "120 overlapping hits (60 in 5 ms windows max): soft steal only, no hard-cut voices");
     }
+    {   // 1.2.0 step editor: edited patterns feed the preview, PLAY WITH HOST, the MIDI and WAV drag-outs and the session; factory stays restorable
+        auto sameEv = [] (const std::vector<cw::pat::Ev>& a, const std::vector<cw::pat::Ev>& b)
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); ++i) if (a[i].beat != b[i].beat || a[i].note != b[i].note || a[i].vel != b[i].vel) return false;
+            return true;
+        };
+        int same = 0, cases = 0;
+        for (int pat = 0; pat < DrumPlayerProcessor::kNumPatterns; ++pat)
+            for (int cfg = 0; cfg < 4; ++cfg)
+            {
+                DrumPlayerProcessor p; set (p, "pattern", (float) pat); set (p, "fillStyle", (float) (cfg * 2)); set (p, "dragLen", (float) cfg); set (p, "swing", cfg == 3 ? 0.66f : 0.5f);
+                const auto fac = p.clipEvents();
+                uint8_t g[cw::pat::kGrid]; cw::pat::factoryGrid (pat, g); p.setGrid (pat, g);
+                const auto ed = p.clipEvents();
+                ++cases; same += (p.patternEdited (pat) && sameEv (fac, ed)) ? 1 : 0;
+            }
+        std::printf ("  edited-but-unchanged = factory: %d / %d cases (18 patterns x 4 loop / fill / swing settings)\n", same, cases);
+        check (same == cases, "a factory pattern copied into the step grid plays exactly the factory events (beats, notes, velocities, order)");
+
+        DrumPlayerProcessor p; set (p, "pattern", 3); set (p, "fillStyle", 0); set (p, "dragLen", 1);
+        const auto fac = p.clipEvents();
+        p.setStep (3, cw::pat::laneOf (cw::pat::nRide), 6, 63);
+        auto ev = p.clipEvents();
+        int rides = 0; for (auto& e : ev) if (e.note == cw::pat::nRide && std::fabs (e.vel - 0.63f) < 1e-6f && std::fabs (e.beat - 1.5) < 1e-9) ++rides;
+        check (rides == 1 && ev.size() == fac.size() + 1, "a step added in the editor (bar 1 of the 2-bar grid) plays at its place and velocity");
+        juce::String err; const auto mf = p.exportMidi (err);
+        juce::MidiFile mfile; { juce::FileInputStream in (mf); mfile.readFrom (in); }
+        int midiRides = 0;
+        if (mfile.getNumTracks() > 0) for (auto* m : *mfile.getTrack (0)) if (m->message.isNoteOn() && m->message.getNoteNumber() == cw::pat::nRide && std::llround (m->message.getTimeStamp()) == 1440 && m->message.getVelocity() == (juce::uint8) std::lround (0.63f * 127)) ++midiRides;
+        check (midiRides == 1 && mf.getFileName().contains ("(edit)"), "the .mid drag-out has the edited step (and says it is an edit)");
+        mf.deleteFile();
+        p.setStep (3, cw::pat::laneOf (cw::pat::nRide), 6, 0);
+        p.setStep (3, cw::pat::laneOf (cw::pat::nKick), 0, 0);
+        ev = p.clipEvents();
+        bool kick0 = false; for (auto& e : ev) kick0 = kick0 || (e.note == cw::pat::nKick && e.beat == 0.0);
+        check (! kick0 && ev.size() == fac.size() - 1, "a step removed in the editor is gone from the clip");
+        p.clearPattern (3); ev = p.clipEvents();
+        check (ev.empty() && p.patternEdited (3), "CLEAR empties the pattern");
+        p.resetPattern (3);
+        check (sameEv (p.clipEvents(), fac) && ! p.patternEdited (3) && std::strlen (cw::pat::patterns()[3].lanes[0].steps) > 0, "RESET TO FACTORY brings the factory pattern back (the factory table is never written)");
+        // fill density + ending
+        set (p, "fillStyle", 2); set (p, "fillLen", 2);
+        const auto full = p.clipEvents(); set (p, "fillDensity", 0.5f); const auto half = p.clipEvents(), half2 = p.clipEvents();
+        int grooveDiff = 0; { std::vector<cw::pat::Ev> a, b; for (auto& e : full) if (e.beat < 4.0 && e.beat > 1e-9) a.push_back (e); for (auto& e : half) if (e.beat < 4.0 && e.beat > 1e-9) b.push_back (e); grooveDiff = sameEv (a, b) ? 0 : 1; }
+        std::printf ("  fill density 100 %%: %d events, 50 %%: %d\n", (int) full.size(), (int) half.size());
+        check (half.size() < full.size() && ! half.empty() && grooveDiff == 0 && sameEv (half, half2), "FILL DENSITY thins the fill only, the same way every time");
+        set (p, "fillDensity", 1.0f); set (p, "fillEnd", 1);
+        ev = p.clipEvents(); bool ride0 = false, crash0 = false; for (auto& e : ev) { ride0 = ride0 || (e.beat == 0.0 && e.note == cw::pat::nRide); crash0 = crash0 || (e.beat == 0.0 && e.note == cw::pat::nCrash); }
+        set (p, "fillEnd", 3); const auto none = p.clipEvents(); bool any0 = false; for (auto& e : none) any0 = any0 || (e.beat == 0.0 && (e.note == cw::pat::nCrash || e.note == cw::pat::nRide));
+        check (ride0 && ! crash0 && ! any0 && none.size() + 1 == full.size(), "FILL ENDING: Ride lands a ride on beat 1, None lands nothing (Crash = 1.1)");
+    }
+    {   // 1.2.0 sound swap + audition + reset to kit
+        DrumPlayerProcessor p; p.setRateAndBufferSizeDetails (sr, bs); p.prepareToPlay (sr, bs);
+        p.presets.loadFactory (1);   // 808 Classic
+        const float pan = v (p, "p2Pan"); const int choke = (int) v (p, "p2Choke");
+        check (! p.padSwapped (1) && p.kitRefName() == cw::factoryPresets()[1].name, "after a kit load no pad counts as swapped; Reset to kit names the kit");
+        p.undoManager.clearUndoHistory();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        p.swapFromKit (1, 2, 1);   // Techno Warehouse's pad 2 (Clap, decay 350, kit tune -1) onto pad 2
+        check (v (p, "p2Sound") == 3 && std::fabs (v (p, "p2Decay") - 350.0f) < 1.0f && std::fabs (v (p, "p2Tune") - (-1.0f)) < 0.05f && v (p, "p2Pan") == pan && (int) v (p, "p2Choke") == choke && p.padSwapped (1),
+               "swap takes the other kit's sound, decay, level and pitch (its KIT TUNE folded into TUNE); pan and choke stay");
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        DrumPlayerProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (v (q, "p2Sound") == 3 && q.padSwapped (1) && q.kitRefName() == cw::factoryPresets()[1].name, "the swap and the kit it came from survive save / load");
+        q.resetPadToKit (1);
+        check (v (q, "p2Sound") == 2 && ! q.padSwapped (1) && std::fabs (v (q, "p2Tune") - (-1.0f)) < 0.05f && v (q, "p2Decay") == 4000.0f, "Reset to kit restores the pad as the kit had it");
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (150);   // the parameter tree (and so the undo history) is updated on the message thread
+        p.undoManager.undo();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+        check (v (p, "p2Sound") == 2 && ! p.padSwapped (1), "a swap can be undone");
+        p.swapBuiltIn (4, 12);
+        check (v (p, "p5Sound") == 12 && v (p, "p5Tune") == 0.0f && v (p, "p5Decay") == 4000.0f, "swap to a built-in sound: plain sound, tune 0, full decay");
+        // audition = the real pad with those settings, sample for sample, and the pad itself is not changed
+        DrumPlayerProcessor a, b; for (auto* x : { &a, &b }) { x->setRateAndBufferSizeDetails (sr, bs); x->prepareToPlay (sr, bs); x->presets.loadFactory (1); set (*x, "p3Choke", 0); set (*x, "velSens", 0.0f); }
+        const auto kq = a.kitPad (7, 2);
+        a.audition (2, kq);
+        set (b, "p3Sound", (float) kq.sound); set (b, "p3Tune", kq.tune); set (b, "p3Decay", kq.decay); set (b, "p3Level", kq.levelDb); set (b, "p3Pan", kq.pan);
+        b.queuePad (2, 0.9f);
+        const auto ya = render (a, 50, {}), yb = render (b, 50, {});
+        float d = 0; double e = 0; for (size_t i = 0; i < ya.size(); ++i) { d = std::max (d, std::fabs (ya[i] - yb[i])); e += ya[i] * ya[i]; }
+        check (e > 0 && d < 1e-6f && v (a, "p3Sound") == 3 && ! a.padSwapped (2), "hover audition plays the pad exactly as the swap would sound, without changing the pad");
+        a.audition (2, a.kitPad (15, 7)); auto pre = render (a, 3, {});   // a long cymbal
+        a.stopAudition(); auto z = render (a, 10, {});
+        check (rmsOf (pre, 0) > 0.001 && rmsOf (z, (size_t) (0.012 * sr)) == 0.0, "leaving the menu stops the audition (10 ms fade)");
+    }
+    {   // 1.2.0 preview = drag-out with step edits and sound swaps
+        FakeHead head; head.bpm = 126.0;
+        int bad = 0, n = 0; float worst = 0;
+        for (int kit : { 2, 15 }) for (int pat : { 4, 13 }) for (int part : { 0, 1, 3 })
+        {
+            DrumPlayerProcessor proc; proc.setPlayHead (&head); proc.setRateAndBufferSizeDetails (sr, bs); proc.prepareToPlay (sr, bs);
+            proc.presets.loadFactory (kit); set (proc, "pattern", (float) pat); set (proc, "fillStyle", 3); set (proc, "dragLen", 1); set (proc, "fillDensity", 0.6f); set (proc, "fillEnd", 1);
+            std::mt19937 rng ((unsigned) (kit * 100 + pat));
+            for (int k = 0; k < 24; ++k) proc.setStep (pat, (int) (rng() % cw::pat::kLanes), (int) (rng() % cw::pat::kSteps), (int) (rng() % 101));
+            proc.swapFromKit (1, 7, 1); proc.swapFromKit (0, 13, 0); proc.swapBuiltIn (3, 11);
+            render (proc, 1, {});
+            juce::AudioBuffer<float> dl; proc.renderClip (part, dl, sr);
+            const int N = dl.getNumSamples();
+            proc.startPreview (part);
+            std::vector<float> R; auto y = render (proc, (4 * N) / bs + 2, {}, 2, &R);
+            float dd = 0;
+            for (int pass = 2; pass < 4; ++pass) for (int i = 0; i < N; ++i)
+                dd = std::max ({ dd, std::fabs (y[(size_t) (pass * N + i)] - dl.getSample (0, i)), std::fabs (R[(size_t) (pass * N + i)] - dl.getSample (1, i)) });
+            worst = std::max (worst, dd); ++n; bad += dd < 1e-5f ? 0 : 1;
+        }
+        std::printf ("  preview vs drag-out with edits + swaps: %d cases, worst max diff %.3g (%.1f dBFS)\n", n, worst, 20 * std::log10 (worst + 1e-30));
+        check (bad == 0, "with step edits, fill density / ending and swapped sounds the preview is still the drag-out WAV, every part");
+    }
+    {   // 1.2.0 editing while the preview plays: nothing already sounding is touched, the next pass follows the edit
+        FakeHead head; head.bpm = 120.0;
+        DrumPlayerProcessor A, B;
+        for (auto* x : { &A, &B }) { x->setPlayHead (&head); x->setRateAndBufferSizeDetails (sr, bs); x->prepareToPlay (sr, bs); set (*x, "fillStyle", 0); set (*x, "dragLen", 0); x->startPreview (0); }
+        const int N = (int) std::llround (4 * 0.5 * sr);   // 1 bar at 120 = 96000
+        auto ya = render (A, 20, {}), yb = render (B, 20, {});   // 0.2 s: the beat-1 kick + hats are ringing
+        B.setStep (0, cw::pat::laneOf (cw::pat::nKick), 0, 0);        // remove the kick that is sounding now
+        B.setStep (0, cw::pat::laneOf (cw::pat::nClap), 10, 100);      // add a clap at beat 2.5 (later in this pass)
+        std::vector<float> ra, rb; auto za = render (A, 400, {}, 2, &ra), zb = render (B, 400, {}, 2, &rb);
+        const size_t clapAt = (size_t) std::llround (2.5 * 0.5 * sr) - 20 * bs;   // in the second render
+        float before = 0; for (size_t i = 0; i < clapAt; ++i) before = std::max (before, std::fabs (za[i] - zb[i]));
+        float stepA = 0, stepB = 0; for (size_t i = 1; i < zb.size(); ++i) { stepA = std::max (stepA, std::fabs (za[i] - za[i - 1])); stepB = std::max (stepB, std::fabs (zb[i] - zb[i - 1])); }
+        int kickNext = 0; for (size_t i = (size_t) N - 20 * bs; i < (size_t) N - 20 * bs + 200; ++i) kickNext += std::fabs (za[i] - zb[i]) > 1e-4f ? 1 : 0;
+        std::printf ("  edit during preview: max diff before the new clap %.3g, largest sample step %.4f (unedited %.4f)\n", before, stepB, stepA);
+        check (before == 0.0f, "toggling steps while the preview plays leaves the sounding kick and everything before the edit bit-identical (no cut, no click)");
+        check (kickNext > 0 && stepB <= stepA * 1.5f + 0.05f, "the next pass follows the edit (no kick on beat 1, the clap plays); no discontinuity bigger than the pattern's own hits");
+    }
+#if DP_COUNT_ALLOCS
+    {   // 1.2.0 real-time safety: no heap allocation and no mutex lock inside processBlock while editing, swapping, auditioning, previewing
+        FakeHead head; head.bpm = 124.0;
+        DrumPlayerProcessor p; p.setPlayHead (&head); p.setRateAndBufferSizeDetails (sr, bs); p.prepareToPlay (sr, bs);
+        p.presets.loadFactory (4);
+        juce::AudioBuffer<float> buf (2, bs); juce::MidiBuffer m;
+        auto block = [&] { buf.clear(); m.clear(); m.addEvent (juce::MidiMessage::noteOn (10, 38, (juce::uint8) 100), 17); tCount = true; p.processBlock (buf, m); tCount = false; };
+        gAllocs = 0; gLocks = 0;
+        p.startPreview (0);
+        std::mt19937 rng (7);
+        for (int k = 0; k < 3000; ++k)
+        {
+            if (k % 3 == 0) p.setStep (0, (int) (rng() % cw::pat::kLanes), (int) (rng() % cw::pat::kSteps), (int) (rng() % 101));
+            if (k % 50 == 0) p.swapFromKit ((int) (rng() % 8), (int) (rng() % 18), (int) (rng() % 8));
+            if (k % 7 == 0) p.audition ((int) (rng() % 8), p.kitPad ((int) (rng() % 18), (int) (rng() % 8)));
+            if (k % 400 == 0) set (p, "pattern", (float) (rng() % 18));
+            if (k % 333 == 0) set (p, "fillDensity", 0.1f + (float) (rng() % 90) / 100.0f);
+            if (k == 1500) { p.stopPreview(); set (p, "patPlay", 1); head.playing = true; }
+            if (head.playing) head.ppq += bs / sr * 124.0 / 60.0;
+            block();
+        }
+        std::printf ("  processBlock x 3000 with edits / swaps / auditions / preview / host play: %ld allocations, %ld mutex locks\n", gAllocs.load(), gLocks.load());
+        check (gAllocs.load() == 0 && gLocks.load() == 0, "no heap allocation and no mutex lock on the audio thread");
+    }
+#endif
+    {   // 1.2.0 session: edits + fill options saved; user patterns; kit presets leave patterns alone; older sessions load unchanged
+        DrumPlayerProcessor a; set (a, "pattern", 5);
+        a.setStep (5, 0, 0, 77); a.setStep (11, 3, 9, 41); set (a, "fillDensity", 0.4f); set (a, "fillEnd", 2);
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        DrumPlayerProcessor b; b.setStateInformation (mb.getData(), (int) mb.getSize());
+        uint8_t ga[cw::pat::kGrid], gb[cw::pat::kGrid]; int eq = 0;
+        for (int pat : { 5, 11 }) { a.getGrid (pat, ga); b.getGrid (pat, gb); eq += std::memcmp (ga, gb, sizeof ga) == 0 && b.patternEdited (pat) ? 1 : 0; }
+        int others = 0; for (int pat = 0; pat < 18; ++pat) others += (pat != 5 && pat != 11 && b.patternEdited (pat)) ? 1 : 0;
+        check (eq == 2 && others == 0 && std::fabs (v (b, "fillDensity") - 0.4f) < 0.006f && v (b, "fillEnd") == 2 && b.stepAt (5, 0, 0) == 77, "step edits (only the edited patterns) and the fill options survive save / load");
+        b.presets.loadFactory (6);
+        check (b.patternEdited (5) && b.stepAt (11, 3, 9) == 41 && v (b, "fillEnd") == 2, "loading a kit preset keeps the pattern edits and fill options");
+        const auto pf = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("dp-test-pattern.dppattern");
+        check (b.savePattern (pf, "Test Groove"), "SAVE PATTERN writes a pattern file");
+        DrumPlayerProcessor c; set (c, "pattern", 5);
+        check (c.loadPattern (pf) && c.patternEdited (5) && c.stepAt (5, 0, 0) == 77 && std::fabs (v (c, "fillDensity") - 0.4f) < 0.006f && v (c, "fillEnd") == 2, "LOAD PATTERN brings back the steps and the groove / fill settings");
+        pf.deleteFile();
+        // an early-1.2 session (before step editing): no fillDensity / fillEnd / STEPS / KITREF
+        DrumPlayerProcessor d; d.presets.loadFactory (3); set (d, "pattern", 9); set (d, "fillStyle", 5);
+        const auto evD = d.clipEvents();
+        juce::MemoryBlock m2; d.getStateInformation (m2);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (m2.getData(), (int) m2.getSize());
+        for (auto* e = xml->getFirstChildElement(); e != nullptr; ) { auto* nx = e->getNextElement(); const auto id = e->getStringAttribute ("id"); if (id == "fillDensity" || id == "fillEnd" || e->hasTagName ("STEPS") || e->hasTagName ("KITREF")) xml->removeChildElement (e, true); e = nx; }
+        juce::MemoryBlock m3; juce::AudioProcessor::copyXmlToBinary (*xml, m3);
+        DrumPlayerProcessor e; e.setStep (9, 0, 0, 100); set (e, "fillDensity", 0.2f);
+        e.setStateInformation (m3.getData(), (int) m3.getSize());
+        const auto evE = e.clipEvents();
+        bool sameE = evD.size() == evE.size(); for (size_t i = 0; sameE && i < evD.size(); ++i) sameE = evD[i].beat == evE[i].beat && evD[i].note == evE[i].note && evD[i].vel == evE[i].vel;
+        check (sameE && ! e.patternEdited (9) && v (e, "fillDensity") == 1.0f && v (e, "fillEnd") == 0 && ! e.padSwapped (0) && e.kitRefName() == cw::factoryPresets()[3].name,
+               "an early-1.2 session loads with factory patterns, density 100 %, crash ending, its kit as the swap reference");
+    }
     {   // state
         DrumPlayerProcessor a; a.uiWidth = 1320; a.uiHeight = 1046;
         a.presets.loadFactory (5); set (a, "p3Pan", 0.4f); set (a, "p8Choke", 3); set (a, "volume", -7.0f);
@@ -407,6 +609,66 @@ int procTests()
 }
 } // namespace
 
+namespace
+{
+// 1.2.0 session compatibility: the same code is built into 1.1.0 (40b1ddf), the first 1.2.0 build (1090de5) and the new build.
+// "mkstates <dir>": a few sessions saved by this build. "replay <blob> <prefix>": load a session and dump what it does (params, clip events,
+// a live MIDI render, the full-loop drag-out render) as files that are compared byte for byte between builds.
+static void f32Out (const juce::File& f, const float* a, const float* b, int n)
+{
+    f.deleteFile(); juce::FileOutputStream os (f);
+    for (int i = 0; i < n; ++i) { os.writeFloat (a[i]); os.writeFloat (b[i]); }
+}
+static int compatMake (const juce::File& dir)
+{
+    dir.createDirectory();
+    auto set = [] (DrumPlayerProcessor& p, const char* id, float v) { if (auto* q = p.apvts.getParameter (id)) q->setValueNotifyingHost (q->convertTo0to1 (v)); };
+    for (int cfg = 0; cfg < 4; ++cfg)
+    {
+        DrumPlayerProcessor p;
+        if (cfg == 1) { p.presets.loadFactory (2); set (p, "pattern", 7); set (p, "fillStyle", 4); set (p, "dragLen", 1); set (p, "fillSeed", 7); set (p, "p3Pan", 0.4f); set (p, "volume", -5.0f); }
+        if (cfg == 2) { p.presets.loadFactory (15); set (p, "pattern", 16); set (p, "fillStyle", 1); set (p, "fillLen", 3); set (p, "dragLen", 3); set (p, "swing", 0.62f); set (p, "bpm", 133.0f); }
+        if (cfg == 3) { p.presets.loadFactory (9); set (p, "pattern", 11); set (p, "fillStyle", 0); set (p, "noteMap", 1); set (p, "baseNote", 2); set (p, "p2Sound", 12); set (p, "p2Tune", -7.0f); set (p, "kitTune", 3.0f); }
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        dir.getChildFile ("state" + juce::String (cfg) + ".bin").replaceWithData (mb.getData(), mb.getSize());
+    }
+    std::printf ("made 4 states in %s\n", dir.getFullPathName().toRawUTF8());
+    return 0;
+}
+static int compatReplay (const juce::File& blob, const juce::String& prefix)
+{
+    const double sr = 48000.0; const int bs = 480;
+    juce::MemoryBlock mb; if (! blob.loadFileAsData (mb)) return 1;
+    DrumPlayerProcessor p; p.setRateAndBufferSizeDetails (sr, bs); p.prepareToPlay (sr, bs);
+    p.setStateInformation (mb.getData(), (int) mb.getSize());
+    juce::String params;
+    for (auto* prm : p.getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) params << r->getParameterID() << "=" << juce::String (r->convertFrom0to1 (r->getValue()), 6) << "\n";
+    params << "presetName=" << p.presets.currentName() << "\n";
+    juce::File (prefix + ".params.txt").replaceWithText (params);
+    juce::String ev; char line[128];
+    for (auto& e : p.clipEvents()) { std::snprintf (line, sizeof line, "%.17g %d %.9g\n", e.beat, e.note, (double) e.vel); ev << line; }
+    juce::File (prefix + ".events.txt").replaceWithText (ev);
+    // live MIDI: every GM / chromatic note in turn, 3 s (host stopped, no pattern)
+    static const int notes[] = { 36, 38, 39, 42, 46, 41, 45, 48, 37, 49, 51, 40, 44, 43, 47, 50 };
+    std::vector<float> L, R; juce::AudioBuffer<float> b (2, bs);
+    for (int blk = 0; blk < 300; ++blk)
+    {
+        juce::MidiBuffer m;
+        for (int k = 0; k < 25; ++k) { const int at = k * 5760 + 37; if (at >= blk * bs && at < (blk + 1) * bs) m.addEvent (juce::MidiMessage::noteOn (10, notes[k % 16], (juce::uint8) (40 + (k * 37) % 88)), at - blk * bs); }
+        b.clear(); p.processBlock (b, m);
+        for (int i = 0; i < bs; ++i) { L.push_back (b.getSample (0, i)); R.push_back (b.getSample (1, i)); }
+    }
+    f32Out (juce::File (prefix + ".live.f32"), L.data(), R.data(), (int) L.size());
+    juce::AudioBuffer<float> dl; p.renderClip (0, dl, sr);
+    f32Out (juce::File (prefix + ".clip.f32"), dl.getReadPointer (0), dl.getReadPointer (1), dl.getNumSamples());
+    std::printf ("replayed %s -> %s (%d events, clip %d samples)\n", blob.getFileName().toRawUTF8(), prefix.toRawUTF8(), (int) p.clipEvents().size(), dl.getNumSamples());
+    return 0;
+}
+} // namespace
+
+#ifdef DP_ANALYZE_HARNESS   // scratch analysis harness, not part of the repo (cmake -DCMAKE_CXX_FLAGS=-DDP_ANALYZE_HARNESS=\"/path/analyze.inc\")
+#include DP_ANALYZE_HARNESS
+#endif
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -417,6 +679,12 @@ int main (int argc, char** argv)
       auto* o = new juce::DynamicObject(); o->setProperty ("checked", (juce::int64) (juce::Time::currentTimeMillis() / 1000)); o->setProperty ("ok", false);
       cw::upd::writeJson (cw::upd::dataDir().getChildFile ("update-cache.json"), juce::var (o)); }
     if (mode == "proc") return procTests();
+#ifdef DP_ANALYZE_HARNESS
+    if (mode == "analyze") return analyzeNew (juce::File (out));
+    if (mode == "analyze_edits") return analyzeEdits();
+#endif
+    if (mode == "mkstates") return compatMake (juce::File (out));
+    if (mode == "replay") return compatReplay (juce::File (out), argc > 3 ? juce::String (argv[3]) : juce::String ("/tmp/replay"));
     DrumPlayerProcessor proc;
     proc.setPlayConfigDetails (0, 2, 48000.0, 512); proc.prepareToPlay (48000.0, 512);
     if (mode == "params")
@@ -431,7 +699,7 @@ int main (int argc, char** argv)
         std::printf ("%d params, %d not automatable\n", proc.getParameters().size(), bad);
         return bad;
     }
-    if (mode.isEmpty() || mode == "big" || mode == "preview") proc.presets.loadFactory (2);   // Techno Warehouse for the product shot
+    if (mode.isEmpty() || mode == "big" || mode == "preview" || mode == "steps" || mode == "swap") proc.presets.loadFactory (2);   // Techno Warehouse for the product shot
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* e = dynamic_cast<DrumPlayerEditor*> (ed.get());
     ed->setVisible (true);
@@ -447,7 +715,49 @@ int main (int argc, char** argv)
         const bool undoOk = proc.undoManager.canUndo();
         std::printf ("%s a preset load can be undone\n", undoOk ? "  ok  " : "  FAIL");
         if (! undoOk) p = "PRESET AUDIT FAILED";
-        return (r.contains ("KEYBOARD AUDIT OK") && m.contains ("MENU AUDIT OK") && p.contains ("PRESET AUDIT OK")) ? 0 : 1;
+        // 1.2.0 step editor + sound-swap menus, driven through the same code paths as the mouse
+        int uiFails = 0;
+        auto ui = [&] (bool c, const char* what) { std::printf ("%s %s\n", c ? "  ok  " : "  FAIL", what); uiFails += c ? 0 : 1; };
+        auto* d = e->getPanel().display(); auto& pop = e->getPanel().popupOverlay();
+        proc.presets.loadFactory (1); proc.apvts.getParameter ("pattern")->setValueNotifyingHost (proc.apvts.getParameter ("pattern")->convertTo0to1 (4.0f));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        cwui::stepEditorOpen (d, true);
+        ui (cwui::stepEditorIsOpen (d), "EDIT STEPS opens the step editor");
+        const int kick = cw::pat::laneOf (cw::pat::nKick), was = proc.stepAt (4, kick, 2);
+        cwui::stepEditorGesture (d, kick, 2, 0);
+        ui (was == 0 && proc.stepAt (4, kick, 2) == 80 && proc.patternEdited (4) && proc.patternLabel().endsWith (" *"), "click an empty step: hit at 80 %, pattern marked edited");
+        cwui::stepEditorGesture (d, kick, 2, -30);
+        ui (proc.stepAt (4, kick, 2) == 100, "drag up on a step: velocity up (clamped at 100 %)");
+        cwui::stepEditorGesture (d, kick, 2, 50);
+        ui (proc.stepAt (4, kick, 2) == 50, "drag down on a step: velocity down");
+        cwui::stepEditorGesture (d, kick, 2, 0);
+        ui (proc.stepAt (4, kick, 2) == 0, "click a hit: removed");
+        cwui::stepEditorStepMenu (d, kick, 6);
+        ui (pop.isOpen() && pop.itemTexts().joinIntoString ("|").contains ("&Accent") && pop.activate ("Ghost") && proc.stepAt (4, kick, 6) == 40, "right-click a step: Accent / Normal / Ghost menu sets the velocity");
+        cwui::stepEditorButton (d, 1);
+        ui (! proc.patternEdited (4), "RESET TO FACTORY");
+        cwui::stepEditorButton (d, 0);
+        { uint8_t g[cw::pat::kGrid]; proc.getGrid (4, g); int on = 0; for (auto x : g) on += x > 0 ? 1 : 0; ui (proc.patternEdited (4) && on == 0, "CLEAR empties every step (the fill still plays on the last bar)"); }
+        cwui::stepEditorButton (d, 1);
+        cwui::stepEditorLaneMenu (d, cw::pat::laneOf (cw::pat::nSnare));
+        const auto t1 = pop.itemTexts().joinIntoString ("|");
+        ui (pop.isOpen() && t1.contains ("&Reset to kit") && t1.contains ("SWAP PAD 2 SOUND FROM") && t1.contains ("Boom Bap Dusty") && t1.contains ("Built-in sounds"), "right-click a lane name: Reset to kit + every kit + built-in sounds");
+        pop.activate ("Boom Bap Dusty");
+        const auto t2 = pop.itemTexts();
+        ui (pop.isOpen() && t2.joinIntoString ("|").contains ("< &Back") && t2.size() >= 9, "a kit opens its 8 pads (hover to listen) with a way back");
+        ui (pop.hoverItem ("KICK 36"), "hovering a pad in the sub-menu auditions it");
+        juce::AudioBuffer<float> ab (2, 512); juce::MidiBuffer am; proc.prepareToPlay (48000.0, 512); ab.clear(); proc.processBlock (ab, am);
+        ui (ab.getMagnitude (0, 512) > 0.0f && ! proc.padSwapped (1), "the audition sounds and does not change the pad");
+        pop.activate ("KICK 36");
+        ui (! pop.isOpen() && proc.padSwapped (1) && (int) proc.apvts.getRawParameterValue ("p2Sound")->load() == 1, "click takes the sound (Boom Bap Dusty's kick onto the snare pad)");
+        cwui::padSwapMenu (d, e->getPanel(), proc, 1);
+        ui (pop.activate ("Reset to kit") && ! proc.padSwapped (1), "Reset to kit restores the pad");
+        cwui::padSwapMenu (d, e->getPanel(), proc, 3); pop.activate ("Built-in sounds");
+        ui (pop.itemTexts().size() >= 17 && pop.activate ("Shaker") && (int) proc.apvts.getRawParameterValue ("p4Sound")->load() == 11, "built-in sounds sub-menu");
+        cwui::stepEditorButton (d, 4);
+        ui (! cwui::stepEditorIsOpen (d), "CLOSE");
+        std::printf (uiFails == 0 ? "STEP EDITOR / SWAP AUDIT OK\n" : "STEP EDITOR / SWAP AUDIT FAILED\n");
+        return (r.contains ("KEYBOARD AUDIT OK") && m.contains ("MENU AUDIT OK") && p.contains ("PRESET AUDIT OK") && uiFails == 0) ? 0 : 1;
     }
     if (mode != "empty") cwui::demoDisplay (e->getPanel().display());
     if (mode == "menu") e->getPanel().demoKnobMenu();
@@ -458,6 +768,19 @@ int main (int argc, char** argv)
         for (int k = 0; k < 300; ++k) { buf.clear(); proc.processBlock (buf, m); }
     }
     if (mode == "presets") e->getPanel().demoPresetMenu();
+    if (mode == "steps" || mode == "swap")   // 1.2.0: the step editor (an edited pattern, the preview running) / the sound-swap sub-menu
+    {
+        proc.apvts.getParameter ("pattern")->setValueNotifyingHost (proc.apvts.getParameter ("pattern")->convertTo0to1 (7.0f));
+        proc.apvts.getParameter ("fillStyle")->setValueNotifyingHost (proc.apvts.getParameter ("fillStyle")->convertTo0to1 (4.0f));
+        proc.setStep (7, cw::pat::laneOf (cw::pat::nRide), 0, 100); proc.setStep (7, cw::pat::laneOf (cw::pat::nRide), 8, 80); proc.setStep (7, cw::pat::laneOf (cw::pat::nRide), 16, 100);
+        proc.setStep (7, cw::pat::laneOf (cw::pat::nClap), 12, 60); proc.setStep (7, cw::pat::laneOf (cw::pat::nKick), 22, 40);
+        proc.swapFromKit (1, 9, 1);
+        cwui::stepEditorOpen (e->getPanel().display(), true);
+        cwui::clickPreview (e->getPanel().display(), -1);
+        juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer m;
+        for (int k = 0; k < 200; ++k) { buf.clear(); proc.processBlock (buf, m); }
+        if (mode == "swap") { cwui::stepEditorLaneMenu (e->getPanel().display(), cw::pat::laneOf (cw::pat::nSnare)); e->getPanel().popupOverlay().activate ("Boom Bap Dusty"); e->getPanel().popupOverlay().hoverItem ("SNARE 38"); }
+    }
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     juce::File f (juce::File::getCurrentWorkingDirectory().getChildFile (out));

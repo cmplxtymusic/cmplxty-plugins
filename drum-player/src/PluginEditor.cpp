@@ -55,6 +55,7 @@ PopupOverlay::PopupOverlay() { setWantsKeyboardFocus (false); setMouseClickGrabs
 
 void PopupOverlay::show (juce::Point<int> where, std::vector<Item> newItems)
 {
+    if (open) { open = false; onClose = nullptr; }   // a menu replacing another (sub-menu): no close callback for the old one
     items = std::move (newItems);
     const auto f = uiFont (13.0f);
     float w = 150.0f;
@@ -89,6 +90,7 @@ void PopupOverlay::dismiss()
     const bool wasOpen = open;
     open = false; setWantsKeyboardFocus (false); giveAwayKeyboardFocus(); setVisible (false);
     if (wasOpen) hostkeys::release (*this);   // native focus back to the host window (Space = play / pause keeps working)
+    if (wasOpen && onClose) { auto f = std::move (onClose); onClose = nullptr; f(); }
 }
 
 juce::Rectangle<int> PopupOverlay::rowBounds (int i) const { return i >= 0 && i < (int) rects.size() ? rects[(size_t) i] : juce::Rectangle<int>(); }
@@ -123,7 +125,12 @@ void PopupOverlay::paint (juce::Graphics& g)
     }
 }
 
-void PopupOverlay::mouseMove (const juce::MouseEvent& e) { const int h = itemAt (e.getPosition()); if (h != hover) { hover = h; repaint(); } }
+void PopupOverlay::mouseMove (const juce::MouseEvent& e) { const int h = itemAt (e.getPosition()); if (h != hover) setHover (h); }
+void PopupOverlay::setHover (int h)
+{
+    hover = h; repaint();
+    if (h >= 0 && h < (int) items.size() && items[(size_t) h].enabled && items[(size_t) h].hover) items[(size_t) h].hover();
+}
 void PopupOverlay::mouseDown (const juce::MouseEvent& e)
 {
     const int i = itemAt (e.getPosition());
@@ -146,7 +153,7 @@ bool PopupOverlay::keyPressed (const juce::KeyPress& k)
         const int d = k.isKeyCode (juce::KeyPress::downKey) ? 1 : -1;
         int i = hover;
         for (int tries = 0; tries < n; ++tries) { i = (i + d + n) % n; if (items[(size_t) i].enabled) break; }
-        hover = i; repaint(); return true;
+        setHover (i); return true;
     }
     if (k.isKeyCode (juce::KeyPress::returnKey) && hover >= 0 && items[(size_t) hover].enabled) { trigger (hover); return true; }
     const auto c = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
@@ -788,18 +795,26 @@ void Panel::resized()
         for (auto& c : ss.ctls) (c.kind == 'k' ? nk : nside)++;
         juce::Rectangle<int> col;
         if (nside > 0) col = nk > 0 ? body.removeFromRight (ss.columnW) : body;
-        // side column: combos and toggles stacked, vertically centred
-        int need = 0; for (auto& c : ss.ctls) need += c.kind == 'c' ? 44 : c.kind == 't' ? 26 : 0;
-        // 1.2.0: a side column that doesn't fit its height is split in two: combos on the left half, toggles on the right
-        const bool split = nk > 0 && need > col.getHeight();
-        juce::Rectangle<int> col2;
-        if (split)
+        // side column: combos and toggles stacked, vertically centred. 1.2.0: a side column that doesn't fit its height is split in two
+        // and the controls flow in order into the left half, then the right half (each half vertically centred)
+        std::vector<juce::Rectangle<int>> side;
+        if (nk > 0 && nside > 0)
         {
-            col2 = col.removeFromRight (col.getWidth() / 2); col.removeFromRight (6);
-            need = 0; for (auto& c : ss.ctls) need += c.kind == 'c' ? 44 : 0;
+            int need = 0; for (auto& c : ss.ctls) need += c.kind == 'c' ? 44 : c.kind == 't' ? 26 : 0;
+            juce::Rectangle<int> cols[2] { col, {} };
+            if (need > col.getHeight()) { cols[1] = cols[0].removeFromRight (col.getWidth() / 2); cols[0].removeFromRight (6); }
+            std::vector<int> colOf, hs; int used[2] { 0, 0 };
+            for (auto& c : ss.ctls)
+                if (c.kind != 'k')
+                {
+                    const int h = c.kind == 'c' ? 44 : 26;
+                    const int ci2 = cols[1].isEmpty() || used[0] + h <= cols[0].getHeight() ? (used[1] > 0 ? 1 : 0) : 1;
+                    colOf.push_back (ci2); hs.push_back (h); used[ci2] += h;
+                }
+            int yy[2] { cols[0].getY() + juce::jmax (0, (cols[0].getHeight() - used[0]) / 2), cols[1].getY() + juce::jmax (0, (cols[1].getHeight() - used[1]) / 2) };
+            for (size_t q = 0; q < colOf.size(); ++q) { const int c2 = colOf[q]; side.push_back ({ cols[c2].getX(), yy[c2], cols[c2].getWidth(), hs[q] }); yy[c2] += hs[q]; }
         }
-        int y = col.getY() + juce::jmax (0, (col.getHeight() - need) / 2);
-        int y2 = col2.getY() + juce::jmax (0, (col2.getHeight() - 26) / 2);
+        size_t si = 0;
         const int kw = nk > 0 ? body.getWidth() / nk : 0;
         int kx = body.getX();
         for (auto& c : ss.ctls)
@@ -818,18 +833,13 @@ void Panel::resized()
             }
             else if (c.kind == 'c')
             {
-                auto& k = *combos[ci++];
-                k.label.setBounds (col.getX() + 2, y, col.getWidth() - 4, 15); k.box.setBounds (col.getX() + 2, y + 16, col.getWidth() - 4, 24); y += 44;
-            }
-            else if (split)
-            {
-                auto& k = *togs[ti++];
-                k.label.setBounds (col2.getX() + 2, y2 + 2, col2.getWidth() - 50, 18); k.button.setBounds (col2.getRight() - 44, y2 + 2, 42, 18); y2 += 26;
+                auto& k = *combos[ci++]; const auto r = side[si++];
+                k.label.setBounds (r.getX() + 2, r.getY(), r.getWidth() - 4, 15); k.box.setBounds (r.getX() + 2, r.getY() + 16, r.getWidth() - 4, 24);
             }
             else
             {
-                auto& k = *togs[ti++];
-                k.label.setBounds (col.getX() + 2, y + 2, col.getWidth() - 50, 18); k.button.setBounds (col.getRight() - 44, y + 2, 42, 18); y += 26;
+                auto& k = *togs[ti++]; const auto r = side[si++];
+                k.label.setBounds (r.getX() + 2, r.getY() + 2, r.getWidth() - 50, 18); k.button.setBounds (r.getRight() - 44, r.getY() + 2, 42, 18);
             }
         }
         if (ss.powerId != nullptr) s->power.setBounds (ss.area.getRight() - 50, ss.area.getY() + 4, 42, 16);

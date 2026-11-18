@@ -1,5 +1,5 @@
 #pragma once
-// CMPLXTY Drum Player 1.1.0 patterns (no JUCE): factory MIDI drum patterns on General MIDI / FPC notes, a seeded fill generator for
+// CMPLXTY Drum Player patterns (no JUCE; 1.1.0, step grid / fill density / ending 1.2.0): factory MIDI drum patterns on General MIDI / FPC notes, a seeded fill generator for
 // the end of the clip, and the clip builder used by the preview, the .mid drag-out and the audio drag-outs.
 // Steps are 16ths: 'X' accent, 'x' hit, 'o' ghost, anything else = rest. A lane string is 16 steps per bar (1 or 2 bars, repeated).
 #include <algorithm>
@@ -43,7 +43,19 @@ enum FillStyle { kNoFill = 0, kAuto, kRoll, kBuild, kToms, kTriplets, kFlams, kB
 inline const char* fillName (int s) { static const char* n[] = { "Off", "Auto", "Roll", "Build", "Toms", "Triplets", "Flams", "Break", "Stutter" }; return s >= 0 && s < kNumFill ? n[s] : "Off"; }
 
 struct Ev { double beat; int note; float vel; };
-struct Clip { int bars = 4; int pattern = 0, fill = kAuto, fillBeats = 4; uint32_t seed = 1; float swing = 0.5f; };   // swing: 0.5 straight .. 0.75 (1.2.0)
+
+// 1.2.0 step editor: every pattern can be edited as a grid of 11 lanes x 32 sixteenths (2 bars, repeated over the loop).
+// A cell holds the velocity in percent (0 = off, 1..100); the factory 'X' / 'x' / 'o' are 100 / 80 / 40, so an edited copy of a
+// factory pattern plays exactly the factory velocities.
+constexpr int kLanes = 11, kSteps = 32, kGrid = kLanes * kSteps;
+inline const int* laneNotes() { static const int n[kLanes] = { nCrash, nRide, nOH, nCH, nRim, nClap, nSnare, nTomH, nTomM, nTomL, nKick }; return n; }
+inline const char* laneName (int l) { static const char* n[kLanes] = { "CRASH", "RIDE", "OPEN HAT", "CL HAT", "RIM", "CLAP", "SNARE", "TOM HI", "TOM MID", "TOM LO", "KICK" }; return l >= 0 && l < kLanes ? n[l] : ""; }
+inline int laneOf (int note) { for (int l = 0; l < kLanes; ++l) if (laneNotes()[l] == note) return l; return -1; }
+inline int stepLevel (char ch) { return ch == 'X' ? 100 : ch == 'x' ? 80 : ch == 'o' ? 40 : 0; }
+enum FillEnd { kEndCrash = 0, kEndRide, kEndOpenHat, kEndNone };
+
+// swing: 0.5 straight .. 0.75 (1.2.0). density / ending shape the fill (1.2.0); steps = the edited grid of this pattern (nullptr = factory)
+struct Clip { int bars = 4; int pattern = 0, fill = kAuto, fillBeats = 4; uint32_t seed = 1; float swing = 0.5f, density = 1.0f; int ending = kEndCrash; const uint8_t* steps = nullptr; };
 
 struct Rng { uint32_t s; explicit Rng (uint32_t x) : s (x * 2654435761u + 0x9e3779b9u) { next(); } uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; } float f() { return (next() & 0xffffff) / 16777216.0f; } int i (int n) { return (int) (next() % (uint32_t) std::max (1, n)); } };
 
@@ -103,6 +115,18 @@ inline void makeFill (std::vector<Ev>& out, int style, double start, int beats, 
     }
 }
 
+// a factory pattern as a step grid (16-step lanes repeated to 32)
+inline void factoryGrid (int pattern, uint8_t* g)
+{
+    std::fill (g, g + kGrid, (uint8_t) 0);
+    const auto& all = patterns();
+    for (const auto& l : all[(size_t) std::clamp (pattern, 0, (int) all.size() - 1)].lanes)
+    {
+        const int lane = laneOf (l.note), n = (int) std::strlen (l.steps);
+        if (lane >= 0) for (int k = 0; k < kSteps; ++k) g[lane * kSteps + k] = (uint8_t) stepLevel (l.steps[k % n]);
+    }
+}
+
 // The whole clip: the pattern repeated over `bars` bars, the last fillBeats replaced by a fill, a crash on beat 1 (where the fill
 // lands when the clip loops). Sorted by beat; all beats in [0, bars * 4). `out` is cleared, not shrunk (no allocation once reserved).
 inline void build (const Clip& c, std::vector<Ev>& out)
@@ -114,26 +138,43 @@ inline void build (const Clip& c, std::vector<Ev>& out)
     const double len = bars * 4.0;
     const bool fill = c.fill != kNoFill;
     const double fillStart = fill ? len - std::clamp (c.fillBeats, 1, bars * 4) : len;
-    for (const auto& l : P.lanes)
+    // lanes in the pattern's own order first (same-sample hits trigger in the factory order, so an unchanged edit is bit-identical), then the rest
+    int order[kLanes]; int no = 0;
+    for (const auto& l : P.lanes) if (const int ln = laneOf (l.note); ln >= 0) { bool dup = false; for (int q = 0; q < no; ++q) dup = dup || order[q] == ln; if (! dup) order[no++] = ln; }
+    if (c.steps != nullptr) for (int ln = 0; ln < kLanes; ++ln) { bool dup = false; for (int q = 0; q < no; ++q) dup = dup || order[q] == ln; if (! dup) order[no++] = ln; }
+    for (int oi = 0; oi < no; ++oi)
     {
-        const int n = (int) std::strlen (l.steps);
+        const int lane = order[oi];
+        const char* str = nullptr; int n = kSteps;
+        if (c.steps == nullptr) for (const auto& l : P.lanes) if (laneOf (l.note) == lane) { str = l.steps; n = (int) std::strlen (l.steps); break; }
         for (int k = 0; k < bars * 16; ++k)
         {
-            const char ch = l.steps[k % n];
-            const float v = ch == 'X' ? 1.0f : ch == 'x' ? 0.8f : ch == 'o' ? 0.4f : 0.0f;
+            const int lvl = c.steps != nullptr ? c.steps[lane * kSteps + k % kSteps] : stepLevel (str[k % n]);
+            const float v = (float) std::min (lvl, 100) / 100.0f;
             const double b = k * 0.25;
             if (v <= 0 || b >= fillStart - 1e-9) continue;
             // 1.2.0 swing: every second 16th of the groove moves later (0.5 = straight, 0.66 = triplet feel, 0.75 = dotted); fills stay straight
-            out.push_back ({ (k & 1) ? b + (std::clamp ((double) c.swing, 0.5, 0.75) - 0.5) * 0.5 : b, l.note, v });
+            out.push_back ({ (k & 1) ? b + (std::clamp ((double) c.swing, 0.5, 0.75) - 0.5) * 0.5 : b, laneNotes()[lane], v });
         }
     }
     if (fill)
     {
+        const size_t f0 = out.size();
         makeFill (out, c.fill, fillStart, (int) (len - fillStart + 0.5), c.seed);
-        bool crash = false; for (auto& e : out) if (e.beat < 1e-9 && e.note == nCrash) crash = true;
-        if (! crash) out.push_back ({ 0.0, nCrash, 0.9f });
+        if (c.density < 0.999f)   // 1.2.0 FILL DENSITY: a seeded choice of the fill's hits is dropped (the first one always stays)
+        {
+            Rng r (c.seed * 7919u + 17u); size_t w = f0;
+            for (size_t i = f0; i < out.size(); ++i) if (i == f0 || r.f() < c.density) out[w++] = out[i];
+            out.resize (w);   // shrinks only: never allocates
+        }
+        // 1.2.0 FILL ENDING: what lands on beat 1 when the loop comes round (Crash = 1.1)
+        static const int endNote[] = { nCrash, nRide, nOH, 0 };
+        const int en = endNote[std::clamp (c.ending, 0, 3)];
+        bool has = en == 0; for (auto& e : out) if (e.beat < 1e-9 && e.note == en) has = true;
+        if (! has) out.push_back ({ 0.0, en, 0.9f });
     }
     for (auto& e : out) if (e.beat < 0) e.beat += len;   // flam grace notes before beat 0 wrap
-    std::stable_sort (out.begin(), out.end(), [] (const Ev& a, const Ev& b) { return a.beat < b.beat; });
+    // stable insertion sort by beat (same order as std::stable_sort, which may allocate a buffer: this also runs on the audio thread)
+    for (size_t i = 1; i < out.size(); ++i) { const Ev e = out[i]; size_t j = i; while (j > 0 && e.beat < out[j - 1].beat) { out[j] = out[j - 1]; --j; } out[j] = e; }
 }
 } // namespace cw::pat

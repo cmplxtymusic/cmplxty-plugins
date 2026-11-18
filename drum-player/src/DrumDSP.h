@@ -172,11 +172,16 @@ public:
 
     void noteOn (int note, float vel) { if (P.gm) noteOnGm (note, vel); else trigger (padForNote (note), vel); }
     void noteOnGm (int note, float vel, int src = 0) { const auto h = gmMap (note); trigger (h.pad, vel, h.st, src); }   // pattern playback: always GM
-    // src tags the voice: 0 = MIDI / pad clicks, 1 = the pattern preview (fadeSource fades only those)
+    // src tags the voice: 0 = MIDI / pad clicks, 1 = the pattern preview, 2 = sound-swap audition (fadeSource fades only those)
     void trigger (int pad, float vel, float extraSt = 0, int src = 0)
     {
         if (pad < 0 || vel <= 0) return;
-        const auto& pp = P.pad[(size_t) pad];
+        triggerWith (pad, P.pad[(size_t) pad], vel, extraSt, src);
+    }
+    // 1.2.0: plays a pad slot with settings other than its own (the sound-swap menu's audition, src 2): same voice code, same output
+    void triggerWith (int pad, const PadP& pp, float vel, float extraSt = 0, int src = 0)
+    {
+        if (pad < 0 || pad >= kPads || vel <= 0) return;
         const Smp* s = pp.sound >= kSounds ? user[(size_t) pad] : &builtIn (pp.sound);
         hits[(size_t) pad].fetch_add (1, std::memory_order_relaxed);
         if (s == nullptr || s->len() < 2) return;
