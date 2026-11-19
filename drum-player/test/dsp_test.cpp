@@ -98,8 +98,8 @@ int main()
     }
     {   // voice stealing
         Engine e; e.prepare (sr); auto P = flat(); P.pad[0].sound = 13; e.setParams (P);
-        for (int i = 0; i < 40; ++i) e.trigger (0, 1);
-        run (e, 64); check (e.activeVoices.load() == kVoices, "32-voice cap, oldest stolen");
+        for (int i = 0; i < kVoices + 8; ++i) e.trigger (0, 1);
+        run (e, 64); check (e.activeVoices.load() == kVoices, "voice cap holds, oldest stolen");
     }
     {   // fuzz: random kits, hits, block sizes, 3 rates
         std::mt19937 rng (7); std::uniform_real_distribution<float> U (0, 1); float worst = 0; bool fin = true;
