@@ -1,4 +1,5 @@
-// Rewired engine tests (no models needed): resampling, tempo, drum split, melody / chord split, monophonic lines, quantize, edge cases, speed.
+// Rewired engine tests (no models needed): resampling, tempo, drum split, melody / chord split, monophonic lines, quantize, edge cases, speed,
+// and (1.1.0) the song map on a synthetic arrangement.
 // Built on its own: the engine sources are plain C++17 (ONNX Runtime is loaded at run time, never linked).
 #if defined (__GNUC__)
  #pragma GCC diagnostic ignored "-Wunused-result"   // ORT C API statuses on optional settings
@@ -6,6 +7,7 @@
 #include "../src/RewiredEngine.cpp"
 #include "../src/OrtModel.cpp"
 #include "../src/Instruments.cpp"
+#include "../src/SongMap.cpp"
 #include <cstdio>
 #include <random>
 #include <chrono>
@@ -135,6 +137,55 @@ int main()
         const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
         CHECK (ms < 4000.0, "2 min of drums split + tempo in %.0f ms", ms);
     }
+    // ---- 1.1.0 song map: 24 bars at 126 bpm, starting 0.5 s in. Bars 0-7 pads only, 8-15 drums + bass (drop), 16-23 pads + vocal.
+    {
+        const double sr = 44100.0, bpm = 126.0, beat = 60.0 / bpm, bar = 4 * beat, off = 0.5;
+        const size_t n = (size_t) (sr * (off + 24 * bar + 1.0));
+        std::vector<float> drums (n, 0.0f), bass (n, 0.0f), music (n, 0.0f), vocals (n, 0.0f);
+        std::mt19937 rng (3); std::uniform_real_distribution<float> u (-1.0f, 1.0f);
+        Result r; r.ok = true; r.bpm = 126.3; r.seconds = (double) n / sr; r.melodyFrom = "instruments";
+        for (int b = 0; b < 24; ++b)
+        {
+            const double t0 = off + b * bar;
+            const bool drop = b >= 8 && b < 16;
+            for (size_t i = (size_t) (t0 * sr); i < (size_t) ((t0 + bar) * sr) && i < n; ++i)
+            {
+                const double t = (double) i / sr;
+                if (! drop) music[i] += (float) (0.2 * std::sin (kTwoPi * 220.0 * t));
+                if (drop) bass[i] += (float) (0.4 * std::sin (kTwoPi * 55.0 * t));
+                if (b >= 16 && std::fmod (t - t0, bar) < bar * 0.6) vocals[i] += (float) (0.2 * std::sin (kTwoPi * 330.0 * t));
+            }
+            if (drop)
+                for (int k = 0; k < 4; ++k)
+                {
+                    const double t = t0 + k * beat;
+                    r.parts[kKick].push_back ({ t, t + 0.1, 36, 110 });
+                    if (k % 2) r.parts[kSnare].push_back ({ t, t + 0.1, 38, 100 });
+                    for (size_t i = 0; i < (size_t) (0.12 * sr); ++i) drums[(size_t) (t * sr) + i] += (float) (0.8 * std::exp (-30.0 * i / sr)) * u (rng);
+                }
+            if (b == 8) r.parts[kCymbals].push_back ({ t0, t0 + 0.5, 49, 100 });
+            if (drop) r.parts[kBass].push_back ({ t0, t0 + bar * 0.95, 33, 100 });
+            if (! drop) r.parts[kChords].push_back ({ t0, t0 + bar * 0.95, 57, 80 });
+        }
+        MapSources ms; ms.drums = &drums; ms.bass = &bass; ms.music = &music; ms.vocals = &vocals;
+        const auto m = buildSongMap (r, ms);
+        CHECK (m.ok && std::abs (m.bpm - 126.0) < 0.01, "map: tempo refined to 126 (detected 126.3): %.3f", m.bpm);
+        CHECK (std::abs (m.firstDownbeat - off) < 0.03, "map: bar 1 found at %.3f s (0.5 s)", m.firstDownbeat);
+        CHECK (m.bars == 24, "map: 24 bars (%d)", m.bars);
+        std::string secs; for (auto& sc : m.sections) secs += sc.label + " " + std::to_string (sc.startBar) + "-" + std::to_string (sc.endBar) + "  ";
+        CHECK (m.sections.size() == 3 && m.sections[0].type == kSecIntro && m.sections[1].type == kSecDrop && m.sections[2].type == kSecOutro
+               && m.sections[1].startBar == 8 && m.sections[2].startBar == 16, "map: Intro / Drop / Outro at bars 1, 9, 17: %s", secs.c_str());
+        auto lane = [&] (const char* nm) -> const MapLane* { for (auto& L : m.lanes) if (L.name == nm) return &L; return nullptr; };
+        auto bars = [] (const MapLane* L) { std::string s; if (L) for (auto b : L->barOn) s += b ? '1' : '0'; return s; };
+        const std::string drop = "000000001111111100000000", calm = "111111110000000011111111", voc = "000000000000000011111111";
+        CHECK (bars (lane ("Drums")) == drop && bars (lane ("Kick")) == drop && bars (lane ("Bass")) == drop, "map: drums / kick / bass lanes play in the drop only");
+        CHECK (bars (lane ("Music")) == calm, "map: music lane plays outside the drop: %s", bars (lane ("Music")).c_str());
+        CHECK (bars (lane ("Vocals")) == voc && lane ("Vocals")->blocks.size() == 8, "map: vocal lane = 8 phrases in the last 8 bars: %s (%zu blocks)", bars (lane ("Vocals")).c_str(), lane ("Vocals") ? lane ("Vocals")->blocks.size() : 0);
+        CHECK (m.buildMs < 200.0, "map: built in %.1f ms", m.buildMs);
+        Result empty; empty.seconds = 2.0;
+        CHECK (buildSongMap (empty, {}).ok, "map: an empty result still gives a (blank) map without crashing");
+    }
+
     std::printf (fails == 0 ? "ALL DSP TESTS PASSED\n" : "%d DSP TEST(S) FAILED\n", fails);
     return fails;
 }

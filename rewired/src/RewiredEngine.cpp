@@ -688,6 +688,10 @@ Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::
         std::array<int, kNumParts> forced; forced.fill (-1);
         labelParts (r, s, src, forced, ! sungMelody, prog);
     }
+    {
+        MapSources ms; ms.vocals = &st[0]; ms.drums = &st[1]; ms.bass = &st[2]; ms.music = &st[3];
+        r.map = buildSongMap (r, ms);
+    }
     if (prog) prog (1.0f, "Done");
     return r;
 }
@@ -735,6 +739,16 @@ Result Engine::transcribeStems (const std::array<Audio, kNumStemSlots>& stems, c
             if (! stems[(size_t) slotOf[k]].empty() && forced[(size_t) k] < 0) { m[(size_t) k] = mono (stems[(size_t) slotOf[k]]); src[(size_t) k] = &m[(size_t) k]; }
         }
         labelParts (r, s, src, forced, false, prog);
+    }
+    {
+        std::array<std::vector<float>, kNumStemSlots> mm;
+        for (int k = 0; k < kNumStemSlots; ++k) if (! stems[(size_t) k].empty()) mm[(size_t) k] = mono (stems[(size_t) k]);
+        auto ptr = [&] (int k) { return mm[(size_t) k].empty() ? nullptr : &mm[(size_t) k]; };
+        MapSources ms; ms.drums = ptr (kStemDrums); ms.bass = ptr (kStemBass); ms.lead = ptr (kStemMelody); ms.chords = ptr (kStemChords);
+        // a melody stem that is a voice (named "vocals" / "vox", or heard as one) is the vocal lane
+        const auto& ms0 = r.subs[kMelody];
+        if (s.stemInst[kStemMelody] == kInstVocals || (ms0.size() == 1 && ms0[0].inst == kInstVocals)) ms.vocals = ms.lead;
+        r.map = buildSongMap (r, ms);
     }
     if (prog) prog (1.0f, "Done");
     return r;

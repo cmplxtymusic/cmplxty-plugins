@@ -12,6 +12,7 @@
 #include <vector>
 #include "OrtModel.h"
 #include "Instruments.h"
+#include "SongMap.h"
 
 namespace rw
 {
@@ -55,6 +56,7 @@ struct Result
     double seconds = 0.0;
     std::string melodyFrom;   // "vocals" / "instruments" / "stem"
     std::array<std::vector<SubPart>, kNumParts> subs;   // 1.0.1: instrument sub-parts of Bass / Melody / Chords (empty = not labelled)
+    SongMap map;                                        // 1.1.0: sections + where every part plays (MAP mode)
 };
 
 using Progress = std::function<void (float, const char*)>;
@@ -90,4 +92,17 @@ std::array<std::vector<Note>, 4> detectDrums (const std::vector<float>& drums44k
 std::vector<Note> monophonic (std::vector<Note> notes, bool lowest);
 void splitMelodyChords (const std::vector<Note>& all, std::vector<Note>& melody, std::vector<Note>& chords, float chordMinNotes, int melodyGap = 7);
 void quantizeNotes (std::vector<Note>& notes, double bpm, int division);
+
+// 1.1.0 MAP mode. Song mode: drums / bass / music (Spleeter "other") / vocals stems. Stems mode: the loaded stems
+// (a melody stem that is a voice becomes the vocal lane). Any of them may be null; the lanes then come from the notes.
+struct MapSources
+{
+    const std::vector<float>* drums = nullptr;
+    const std::vector<float>* bass = nullptr;
+    const std::vector<float>* music = nullptr;
+    const std::vector<float>* vocals = nullptr;
+    const std::vector<float>* lead = nullptr;
+    const std::vector<float>* chords = nullptr;
+};
+SongMap buildSongMap (const Result&, const MapSources&);
 } // namespace rw

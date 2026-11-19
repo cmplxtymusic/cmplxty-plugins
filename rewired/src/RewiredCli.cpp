@@ -1,6 +1,7 @@
 // RewiredCli: command-line transcription (used by the accuracy tests, also handy for batch work).
 //   RewiredCli [--models DIR] (--song FILE | --bass F --melody F --chords F --drums F) --out OUT.mid [--json OUT.json]
 //              [--onset X] [--frame X] [--minms X] [--drums-sens X] [--melody-src 0|1|2] [--quantize 0..3] [--bpm X]
+//              [--map MAP.mid] [--map-json MAP.json] [--map-midi all|Lane,Lane]   (1.1.0 MAP mode: song map file / dump / lanes with real MIDI)
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "RewiredEngine.h"
 #include "RewiredIO.h"
@@ -10,6 +11,7 @@ int main (int argc, char** argv)
 {
     juce::StringPairArray a; juce::String song, out, json, dump; std::array<juce::String, rw::kNumStemSlots> stems;
     rw::Settings s; juce::String models, tagFile; bool hints = false;
+    juce::String mapOut, mapJson, mapMidi;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const juce::String k (argv[i]), v (argv[i + 1]);
@@ -24,6 +26,7 @@ int main (int argc, char** argv)
         else if (k == "--inst") s.instruments = v.getIntValue() != 0;
         else if (k == "--name-hints") hints = v.getIntValue() != 0;
         else if (k == "--tag") tagFile = v;
+        else if (k == "--map") mapOut = v; else if (k == "--map-json") mapJson = v; else if (k == "--map-midi") mapMidi = v;
         else { std::fprintf (stderr, "unknown option %s\n", argv[i]); return 2; }
     }
     if (tagFile.isNotEmpty())   // --tag FILE --out OUT.json : pooled instrument-group scores per 0.48 s hop
@@ -81,6 +84,35 @@ int main (int argc, char** argv)
         std::printf ("  %-8s %zu notes", rw::partName (p), r.parts[(size_t) p].size());
         for (auto& sp : r.subs[(size_t) p]) std::printf ("  [%s %zu, %.2f]", sp.name.c_str(), sp.notes.size(), sp.confidence);
         std::printf ("\n");
+    }
+    const auto& mp = r.map;
+    std::printf ("map: %.2f bpm, bar 1 at %.3f s, %d bars, %zu sections, %zu lanes, built in %.1f ms\n", mp.bpm, mp.firstDownbeat, mp.bars, mp.sections.size(), mp.lanes.size(), mp.buildMs);
+    for (auto& sc : mp.sections) std::printf ("  %-8s bars %3d-%3d\n", sc.label.c_str(), sc.startBar + 1, sc.endBar);
+    if (mapOut.isNotEmpty())
+    {
+        std::vector<bool> real (mp.lanes.size(), false);
+        const auto want = juce::StringArray::fromTokens (mapMidi, ",", "");
+        for (size_t i = 0; i < mp.lanes.size(); ++i) real[i] = mapMidi == "all" || want.contains (juce::String (mp.lanes[i].name));
+        if (! rw::io::writeMapMidi (juce::File::getCurrentWorkingDirectory().getChildFile (mapOut), r, real, "Rewired", e)) { std::fprintf (stderr, "%s\n", e.toRawUTF8()); return 1; }
+    }
+    if (mapJson.isNotEmpty())
+    {
+        juce::String j; j << "{\"bpm\":" << mp.bpm << ",\"firstDownbeat\":" << mp.firstDownbeat << ",\"bars\":" << mp.bars << ",\"buildMs\":" << mp.buildMs
+                         << ",\"time\":" << secs << ",\"transcribeBpm\":" << r.bpm << ",\"sections\":[";
+        for (size_t i = 0; i < mp.sections.size(); ++i)
+            j << (i ? "," : "") << "[\"" << mp.sections[i].label << "\"," << mp.sections[i].type << "," << mp.sections[i].startBar << "," << mp.sections[i].endBar << "]";
+        j << "],\"lanes\":[";
+        for (size_t i = 0; i < mp.lanes.size(); ++i)
+        {
+            auto& L = mp.lanes[i];
+            j << (i ? "," : "") << "{\"name\":\"" << L.name << "\",\"group\":" << L.group << ",\"audio\":" << (L.fromAudio ? "true" : "false") << ",\"child\":" << (L.child ? "true" : "false") << ",\"barOn\":[";
+            for (size_t b = 0; b < L.barOn.size(); ++b) j << (b ? "," : "") << (int) L.barOn[b];
+            j << "],\"blocks\":[";
+            for (size_t b = 0; b < L.blocks.size(); ++b) j << (b ? "," : "") << "[" << L.blocks[b].start << "," << L.blocks[b].end << "," << L.blocks[b].velocity << "]";
+            j << "]}";
+        }
+        j << "]}";
+        juce::File::getCurrentWorkingDirectory().getChildFile (mapJson).replaceWithText (j);
     }
     if (json.isNotEmpty())
     {

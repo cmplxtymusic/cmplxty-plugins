@@ -124,6 +124,7 @@ std::vector<int> assignStemSlots (const juce::StringArray& files, const std::arr
 void displayDrop (juce::Component* display, int target, const juce::StringArray& files);   // target: 0..4 slot box, 10 LOAD SONG, 11 LOAD STEMS, 20 elsewhere
 void displayExpand (juce::Component* display, int part);
 void displayHover (juce::Component* display, int target);
+int displayMapRows (juce::Component* display);   // 1.1.0: lanes shown in the MAP view (after a paint)
 
 // The whole interface, laid out at a fixed base size and scaled by the editor (so the window can be resized freely).
 class Panel final : public juce::Component, private juce::Timer

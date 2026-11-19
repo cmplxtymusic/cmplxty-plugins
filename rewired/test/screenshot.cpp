@@ -1,5 +1,6 @@
 // Renders the real RewiredEditor to a PNG, and runs the processor-level tests.
-// usage: RewiredScreenshot out.png [banner|menu|big|empty|keys|params|proc|presets]
+// usage: RewiredScreenshot out.png [banner|menu|big|empty|keys|params|proc|presets|map|mapmidi|mapempty]
+//   map / mapmidi: with RW_MAP_SONG=<file> (and the models) a real run of that song, else the demo result; mapmidi switches real MIDI on for two lanes
 #include "PluginEditor.h"
 #include "PresetKitTest.h"
 #include <random>
@@ -38,6 +39,7 @@ rw::Result demoResult()
     for (auto& n : r.parts[rw::kChords]) (n.start < 8.0 ? st : pn).notes.push_back (n);
     hn.notes = r.parts[rw::kMelody];
     r.subs[rw::kChords] = { st, pn }; r.subs[rw::kMelody] = { hn };
+    r.map = rw::buildSongMap (r, {});   // 1.1.0: a map from the notes alone (no stem audio here)
     return r;
 }
 
@@ -129,12 +131,59 @@ int procTests()
         check (drumsOn10, "drums on MIDI channel 10");
     }
 
+    // ---- 1.1.0 MAP mode: the file FL Studio gets (markers, named tracks, blocks or real notes), and the map in the saved state
+    {
+        const auto r = proc.result();
+        check (r.map.ok && r.map.bars == 8 && ! r.map.sections.empty() && std::abs (r.map.bpm - 120.0) < 0.01 && std::abs (r.map.firstDownbeat) < 0.01,
+               "demo result has a map: 120 bpm, bar 1 at 0 s, 8 bars");
+        juce::StringArray lanes; for (auto& L : r.map.lanes) lanes.add (L.name);
+        check (lanes.joinIntoString (",") == "Drums,Kick,Snare,Hats,Cymbals,Bass,Chords,Chords - Strings,Chords - Piano / Keys,Vocals",
+               ("map lanes: drums + pieces, bass, chords + instruments, vocals = the sung melody (" + lanes.joinIntoString (",") + ")").toRawUTF8());
+        int vocBars = 0; for (auto& L : r.map.lanes) if (L.name == "Vocals") for (auto b : L.barOn) vocBars += b;
+        check (vocBars == 8, "vocal lane (sung melody, no stem audio): all 8 bars");
+        int kickBars = 0; for (auto& L : r.map.lanes) if (L.name == "Kick") for (auto b : L.barOn) kickBars += b;
+        check (kickBars == 8, "kick lane plays in all 8 bars");
+        const rw::MapLane* strings = nullptr; for (auto& L : r.map.lanes) if (L.name == "Chords - Strings") strings = &L;
+        check (strings != nullptr && strings->blocks.size() == 1 && std::abs (strings->blocks[0].start) < 0.01 && std::abs (strings->blocks[0].end - 8.0) < 0.6,
+               "strings lane: one block over the first 4 bars (0-8 s)");
+        auto mapF = proc.exportMap (err);
+        check (mapF.existsAsFile() && mapF.getFileName().endsWith (" - Map.mid") && err.isEmpty(), "EXPORT MAP writes <title> - Map.mid");
+        juce::MidiFile mf; { juce::FileInputStream in (mapF); mf.readFrom (in); }
+        juce::StringArray markers, names; int blocks = -1, bassNotes = 0;
+        for (auto* e : *mf.getTrack (0)) if (e->message.isTextMetaEvent() && e->message.getMetaEventType() == 6) markers.add (e->message.getTextFromTextMetaEvent());
+        for (int t = 1; t < mf.getNumTracks(); ++t)
+        {
+            juce::String nm; int notes = 0;
+            for (auto* e : *mf.getTrack (t)) { if (e->message.isTrackNameEvent() && nm.isEmpty()) nm = e->message.getTextFromTextMetaEvent(); if (e->message.isNoteOn()) ++notes; }
+            names.add (nm);
+            if (nm == "Chords - Strings") blocks = notes;
+        }
+        juce::StringArray secs; for (auto& sc : r.map.sections) secs.add (juce::String (sc.label)); secs.add ("End");
+        check (markers == secs, ("one marker per section + End (" + markers.joinIntoString (",") + ")").toRawUTF8());
+        check (names[0] == "Sections" && names.size() == (int) r.map.lanes.size() + 1 && names[1] == "Drums" && names[names.size() - 1] == "Vocals", "a Sections track, then one named track per lane");
+        check (blocks == 1, "an empty-block lane holds one note per block");
+        proc.setMapMidi ("Bass", true);
+        auto mapF2 = proc.exportMap (err);
+        { juce::MidiFile m2; juce::FileInputStream in (mapF2); m2.readFrom (in);
+          for (int t = 1; t < m2.getNumTracks(); ++t)
+          { bool isBass = false; int n = 0; for (auto* e : *m2.getTrack (t)) { if (e->message.isTrackNameEvent() && e->message.getTextFromTextMetaEvent() == "Bass") isBass = true; if (e->message.isNoteOn()) ++n; }
+            if (isBass) bassNotes = n; } }
+        check (bassNotes == (int) demoResult().parts[rw::kBass].size(), "REAL MIDI on a lane writes its transcribed notes instead of blocks");
+        proc.setMapView (true);
+    }
+
     juce::MemoryBlock st; proc.getStateInformation (st);
     RewiredProcessor p2; p2.setStateInformation (st.getData(), (int) st.getSize());
     check (p2.hasResult() && p2.result().parts[rw::kKick].size() == demoResult().parts[rw::kKick].size() && ! p2.partOn (rw::kHats) && p2.partOn (rw::kBass), "result + part switches survive save / load");
     check (p2.result().subs[rw::kChords].size() == 2 && p2.result().subs[rw::kChords][1].name == "Piano / Keys"
            && p2.result().subs[rw::kChords][0].notes.size() == demoResult().subs[rw::kChords][0].notes.size(), "instrument sub-parts survive save / load");
     check (p2.input (RewiredProcessor::kSong) == song && p2.songMode(), "inputs survive save / load");
+    {
+        const auto a = proc.result().map, b = p2.result().map;
+        bool same = a.ok == b.ok && a.bars == b.bars && a.sections.size() == b.sections.size() && a.lanes.size() == b.lanes.size();
+        for (size_t i = 0; same && i < a.lanes.size(); ++i) same = a.lanes[i].name == b.lanes[i].name && a.lanes[i].blocks.size() == b.lanes[i].blocks.size() && a.lanes[i].barOn == b.lanes[i].barOn;
+        check (same && p2.mapView() && p2.mapMidi ("Bass") && ! p2.mapMidi ("Kick"), "song map, MAP view and REAL MIDI lanes survive save / load");
+    }
     p2.clearAll(); check (! p2.hasResult() && ! p2.hasAnyInput() && p2.status() == RewiredProcessor::Status::idle, "clear");
     const char junk[] = "RWR1\xff\xff\xff\x7fgarbage"; p2.setStateInformation (junk, sizeof (junk)); check (true, "garbage state ignored");
     juce::String e2; check (! p2.exportMidi (false, e2).existsAsFile() && e2.isNotEmpty(), "export without a result explains why");
@@ -173,7 +222,16 @@ int main (int argc, char** argv)
         std::printf ("%d params, %d not automatable\n", proc.getParameters().size(), bad);
         return bad;
     }
-    if (mode != "empty")
+    const bool mapMode = mode == "map" || mode == "mapmidi";
+    const auto mapSong = juce::SystemStats::getEnvironmentVariable ("RW_MAP_SONG", {});
+    if (mapMode && mapSong.isNotEmpty() && proc.modelDir() != juce::File())
+    {
+        proc.setInput (RewiredProcessor::kSong, juce::File (mapSong));
+        proc.startProcess();
+        if (! proc.testWaitProcess (600000)) { std::printf ("map run failed: %s\n", proc.lastMessage().toRawUTF8()); return 1; }
+        std::printf ("%s\n", proc.lastMessage().toRawUTF8());
+    }
+    else if (mode != "empty" && mode != "mapempty")
     {
         juce::File demo ("/workspace/rw-songs/song1/mix.wav");
         if (demo.existsAsFile()) proc.setInput (RewiredProcessor::kSong, demo);
@@ -215,6 +273,8 @@ int main (int argc, char** argv)
         std::printf (fails == 0 ? "DROP TESTS PASSED\n" : "%d DROP TEST(S) FAILED\n", fails);
         ed.reset(); return fails;
     }
+    if (mapMode || mode == "mapempty") proc.setMapView (true);
+    if (mode == "mapmidi") { proc.setMapMidi ("Bass", true); proc.setMapMidi ("Kick", true); proc.setMapMidi ("Snare", true); }
     if (mode == "subs") { rwui::displayExpand (e->getPanel().display(), rw::kChords); rwui::displayHover (e->getPanel().display(), RewiredProcessor::kChordsStem); }
     if (mode == "menu") e->getPanel().demoKnobMenu();
     if (mode == "presets") e->getPanel().getPresetBar().openMenu();

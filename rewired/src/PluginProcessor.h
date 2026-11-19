@@ -75,6 +75,14 @@ public:
     juce::File exportPart (int part, juce::String& err);     // <title> - <Part>.mid (for drag-out); a part with instruments gets one track each
     juce::File exportSub (int part, int sub, juce::String& err);   // <title> - <Part> - <Instrument>.mid (one instrument sub-part)
 
+    // ---- 1.1.0 MAP mode: the song map view, and which lanes carry the real transcribed MIDI instead of empty blocks
+    bool mapView() const noexcept { return mapViewOn.load(); }
+    void setMapView (bool on) { mapViewOn.store (on); ++version; }
+    bool mapMidi (const juce::String& lane) const { const juce::ScopedLock l (inLock); return mapMidiLanes.contains (lane); }
+    void setMapMidi (const juce::String& lane, bool on);
+    std::vector<bool> mapMidiFlags (const rw::SongMap&) const;   // per lane of the map
+    juce::File exportMap (juce::String& err);                   // <title> - Map.mid
+
     // test hooks
     bool testWaitProcess (int timeoutMs);
     void testSetResult (const rw::Result&);
@@ -93,7 +101,8 @@ private:
     std::array<std::atomic<bool>, rw::kNumParts> partEnabled;
     std::atomic<int> st { 0 }, version { 0 };
     std::atomic<float> prog { 0.0f };
-    std::atomic<bool> cancel { false };
+    std::atomic<bool> cancel { false }, mapViewOn { false };
+    juce::StringArray mapMidiLanes;   // lane names (guarded by inLock)
     std::unique_ptr<juce::Thread> worker;
     mutable juce::SpinLock msgLock;
     juce::String message;

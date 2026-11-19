@@ -114,6 +114,96 @@ inline bool writeMidi (const juce::File& f, const Result& r, const std::vector<i
     return true;
 }
 
+// ---------------------------------------------------------------------------------------------------- 1.1.0 MAP mode file
+// Type-1 file for FL Studio (or any DAW): track 0 = title / tempo / 4-4 / one marker per section (+ "Song start" when the
+// reference audio does not start on bar 1); then a "Sections" track (one block per section, a text event with its name);
+// then one named track per lane. A lane holds an empty block (one long note) wherever that part plays, or with realMidi[lane]
+// the transcribed notes instead. The map's bar 1 lands on a bar line of the file: when the reference starts later than 0 s
+// the file starts with a bar of lead-in and the "Song start" marker shows where to drop the reference audio.
+inline int sectionPitch (int type) { static const int p[] = { 48, 50, 52, 53, 55 }; return type >= 0 && type < kNumSecTypes ? p[type] : 48; }
+
+inline int mapLeadInBars (const SongMap& m)
+{
+    return std::max (0, (int) std::ceil ((m.firstDownbeat - 0.03) / m.barSeconds()));   // bar 1 within 30 ms of the start: no lead-in
+}
+
+inline juce::MidiFile makeMapMidi (const Result& r, const std::vector<bool>& realMidi, const juce::String& title)
+{
+    const auto& m = r.map;
+    constexpr int ppq = 960;
+    juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq);
+    const double bpm = m.bpm > 0 ? m.bpm : 120.0, shift = mapLeadInBars (m) * m.barSeconds() - m.firstDownbeat;
+    auto ticks = [&] (double sec) { return std::max (0.0, std::round ((sec + shift) * bpm / 60.0 * ppq)); };
+    auto barTicks = [&] (double bar) { return ticks (m.barTime (bar)); };
+    auto meta = [] (juce::MidiMessageSequence& q, int type, const juce::String& text, double t)
+    { auto e = juce::MidiMessage::textMetaEvent (type, text); e.setTimeStamp (t); q.addEvent (e); };
+
+    juce::MidiMessageSequence head;
+    meta (head, 3, title + " - Map", 0);
+    { auto e = juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / bpm)); e.setTimeStamp (0); head.addEvent (e); }
+    { auto e = juce::MidiMessage::timeSignatureMetaEvent (4, 4); e.setTimeStamp (0); head.addEvent (e); }
+    if (shift > 0.03) meta (head, 6, "Song start", ticks (0.0));
+    for (auto& s : m.sections) meta (head, 6, juce::String (s.label), barTicks (s.startBar));
+    meta (head, 6, "End", barTicks (m.bars));
+    head.sort(); mf.addTrack (head);
+
+    juce::MidiMessageSequence sec;
+    meta (sec, 3, "Sections", 0);
+    for (auto& s : m.sections)
+    {
+        const double t0 = barTicks (s.startBar), t1 = barTicks (s.endBar);
+        meta (sec, 1, juce::String (s.label), t0);
+        auto on = juce::MidiMessage::noteOn (16, sectionPitch (s.type), (juce::uint8) 100); on.setTimeStamp (t0); sec.addEvent (on);
+        auto off = juce::MidiMessage::noteOff (16, sectionPitch (s.type)); off.setTimeStamp (std::max (t0 + 1, t1 - 1)); sec.addEvent (off);
+    }
+    sec.sort(); sec.updateMatchedPairs(); mf.addTrack (sec);
+
+    int nextChn = 1;
+    for (size_t li = 0; li < m.lanes.size(); ++li)
+    {
+        const auto& L = m.lanes[li];
+        const bool drum = L.drumNote >= 0, real = li < realMidi.size() && realMidi[li];
+        int chn = 10;
+        if (! drum) { chn = nextChn; if (++nextChn == 10) ++nextChn; if (nextChn > 15) nextChn = 1; }
+        juce::MidiMessageSequence q;
+        meta (q, 3, juce::String (L.name), 0);
+        auto addNote = [&] (int pitch, int vel, double s0, double s1)
+        {
+            const double t0 = ticks (s0), t1 = std::max (t0 + 1, ticks (s1));
+            auto on = juce::MidiMessage::noteOn (chn, juce::jlimit (0, 127, pitch), (juce::uint8) juce::jlimit (1, 127, vel)); on.setTimeStamp (t0); q.addEvent (on);
+            auto off = juce::MidiMessage::noteOff (chn, juce::jlimit (0, 127, pitch)); off.setTimeStamp (t1); q.addEvent (off);
+        };
+        if (real)
+        {
+            std::vector<const std::vector<Note>*> src;
+            if (L.part >= 0) src.push_back (L.sub >= 0 && (size_t) L.sub < r.subs[(size_t) L.part].size() ? &r.subs[(size_t) L.part][(size_t) L.sub].notes : &r.parts[(size_t) L.part]);
+            else for (int p : L.midiParts) src.push_back (&r.parts[(size_t) p]);
+            if (! drum)
+            {
+                const int part = L.part >= 0 ? L.part : (L.midiParts.empty() ? (int) kChords : L.midiParts[0]);
+                const int prog = L.sub >= 0 && (size_t) L.sub < r.subs[(size_t) part].size() ? instGmProgram (r.subs[(size_t) part][(size_t) L.sub].inst, part) : gmProgram (part);
+                auto pc = juce::MidiMessage::programChange (chn, prog); pc.setTimeStamp (0); q.addEvent (pc);
+            }
+            for (auto* v : src) for (auto& n : *v) addNote (n.pitch, n.velocity, n.start, n.end);
+        }
+        else
+            for (auto& b : L.blocks) addNote (drum ? L.drumNote : 60, b.velocity, b.start, b.end);
+        q.sort(); q.updateMatchedPairs();
+        mf.addTrack (q);
+    }
+    return mf;
+}
+
+inline bool writeMapMidi (const juce::File& f, const Result& r, const std::vector<bool>& realMidi, const juce::String& title, juce::String& err)
+{
+    if (! r.map.ok) { err = "No song map yet - press PROCESS first"; return false; }
+    auto mf = makeMapMidi (r, realMidi, title);
+    f.deleteFile();
+    juce::FileOutputStream os (f);
+    if (os.failedToOpen() || ! mf.writeTo (os, 1)) { err = "Can't write " + f.getFullPathName(); return false; }
+    return true;
+}
+
 // where the models and the ONNX Runtime library live (installed once, shared by VST3 / CLAP / Standalone)
 inline juce::Array<juce::File> modelDirCandidates()
 {

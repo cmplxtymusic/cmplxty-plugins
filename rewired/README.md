@@ -9,6 +9,8 @@ Everything runs on the CPU and nothing is uploaded. Licence: **GNU GPL v3** (see
 
 ![screenshot](docs/screenshot.png)
 
+![map mode](docs/screenshot-map.png)
+
 ## Why a Standalone app as well as the plug-in
 Transcription is offline work. A song is read from a file, separated into stems and analysed in about 5 s per 30 s of audio, so it has nothing to do with
 the DAW's audio stream. The models are about 80 MB, and you may want to transcribe a song without opening a project, so a small app is the most
@@ -26,6 +28,16 @@ passes audio through untouched. All three formats share one copy of the models.
    Piano / Keys, Organ, Guitar, Mallets / Bells, Synth, Vocals, Bass Guitar, Upright Bass / Synth Bass). Each has its own **DRAG MIDI** chip, and the
    exported file splits the part into one named track per instrument with a matching GM program. Labels are a guess from the sound and are shown as
    "guess NN%"; a stem whose file name names the instrument (e.g. "Horns.wav") uses that name instead. They are much more reliable from stems than from a full mix.
+
+5. **Map mode (1.1.0):** press **MAP** (bottom right of the display) after PROCESS to see the song as a map: the tempo and bar count, the
+   **sections** (Intro, Build, Drop, Break, Outro) as a ruler, and one lane per instrument with a block wherever that part plays:
+   **Drums** plus **Kick / Snare / Hats / Cymbals**, **Bass**, **Lead**, **Chords** (with the instrument sub-lanes from 1.0.1), **Music**
+   (everything else in a full mix) and a **Vocals** lane that shows the vocal phrases. **DRAG MAP** (or **EXPORT MAP**) gives one MIDI file
+   for FL Studio: a marker per section, a "Sections" track, and one named track per lane holding an empty block (one long note) where
+   that part plays, so you can fill the arrangement in with your own sounds. Tick **REAL MIDI** on a lane to put its transcribed notes in
+   the file instead of the block. When the song does not start on bar 1, the file has one bar of lead-in and a "Song start" marker that
+   shows where to drop the reference audio so it lines up. Inspired by song-map "stencils"; the map here is made automatically, so
+   section names are a best guess (see "How it works").
 
 ## Controls
 - **Note Onset / Note Hold**: how readily notes start and how long they are held. Low values give more notes.
@@ -46,6 +58,12 @@ passes audio through untouched. All three formats share one copy of the models.
 - **Instruments:** Google **YAMNet** (Apache-2.0, ~15 MB ONNX, `models/instruments.onnx`) tags each note's audio; a small head trained on rendered
   soundfont clips (FluidR3_GM, TimGM6mb; training only, not shipped) maps the 521 AudioSet classes to 11 groups. Bass uses the raw YAMNet classes. See `tools/instruments/`.
 - **Tempo:** autocorrelation of the onset envelope. It is used for the MIDI tempo and for quantizing.
+- **Map (1.1.0, `src/SongMap.cpp`):** the tempo is refined on the whole song by lining up the kick and snare hits (phase coherence), which also
+  fixes half-tempo drum & bass. Bar 1 is the beat phase where parts come in after a rest and crashes land. Each lane is on where its stem is
+  within 24 dB of its own loud level (drum pieces, lead, chords and instrument lanes: where their notes are), with short gaps closed.
+  Sections come from a novelty curve over per-bar features (stem levels, kick / snare / hat density) with a preference for 4- and 8-bar
+  phrases; the loudest sections with drums and bass are drops, a section that rises into a drop is a build, the first is the intro and
+  everything after the last drop is the outro. It adds about 0.2-0.3 s to a 3-minute song.
 - **Runtime:** ONNX Runtime 1.23.2 (MIT), CPU only. It is loaded at run time from the model folder, is never linked, and is renamed `cmplxty-rewired-ort.dll` on Windows.
   The model folders are Windows `Common Files\CMPLXTY\Rewired` (per-user: `%LOCALAPPDATA%\Programs\Common\CMPLXTY\Rewired`) and macOS `/Library/Application Support/CMPLXTY/Rewired`.
 
@@ -71,4 +89,8 @@ scripts/build-macos-pkg.sh     # on a Mac
 - `test/eval.py` scores against reference MIDI with **mir_eval**: note-onset P/R/F1 (50 ms, 50 cents) for pitched parts and onset F for drums.
   `test/make_songs.py` renders the 6 synthetic test songs (GM-style bass, lead, pads, drums), and their stems, from known MIDI.
   Mean F1 on these songs: **song mode 0.836**, **stems mode 0.943** (see NOTES). Real recordings will score lower, especially melody and chords in full mixes.
+- `test/make_map_songs.py` renders 4 arranged songs (140 dubstep, 128 house, 174 drum & bass, 100 midtempo; 60-128 bars, two with a lead-in)
+  with a known section / lane truth table; `test/map_eval.py` scores a map against it (tempo, bar 1, section boundaries in bars, labels, lane
+  on/off per bar) and parses the map MIDI back (markers, track names, blocks). 1.1.0, song mode: 22 of 24 boundaries within 1 bar
+  (mean error 0.34 bars), labels right on 98 % of bars, lanes right on 95.4 % of lane-bars; stems mode: 21 / 24 (mean 0.68 bars), 96 %, 99 %. See NOTES-1.1.0.md.
 - Validated with pluginval (strictness 5) and clap-validator on Linux.

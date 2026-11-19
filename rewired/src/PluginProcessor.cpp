@@ -175,7 +175,9 @@ void RewiredProcessor::run()
     const auto secs = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
     const auto rr = result();
     setMessage (juce::String (total) + " notes in " + juce::String (secs, 1) + " s  -  " + juce::String (rr.bpm, 1) + " BPM"
-                + (songMode() ? "  -  melody from " + juce::String (rr.melodyFrom) : juce::String()) + "  -  drag parts into your DAW");
+                + (songMode() ? "  -  melody from " + juce::String (rr.melodyFrom) : juce::String())
+                + (rr.map.ok ? "  -  map: " + juce::String ((int) rr.map.sections.size()) + " sections, " + juce::String (rr.map.bars) + " bars" : juce::String())
+                + "  -  drag parts into your DAW");
     st.store ((int) Status::ready); ++version;
 }
 
@@ -220,6 +222,31 @@ juce::File RewiredProcessor::exportSub (int part, int sub, juce::String& err)
     return f;
 }
 
+void RewiredProcessor::setMapMidi (const juce::String& lane, bool on)
+{
+    { const juce::ScopedLock l (inLock); if (on) mapMidiLanes.addIfNotAlreadyThere (lane); else mapMidiLanes.removeString (lane); }
+    ++version;
+}
+
+std::vector<bool> RewiredProcessor::mapMidiFlags (const rw::SongMap& m) const
+{
+    std::vector<bool> f (m.lanes.size(), false);
+    const juce::ScopedLock l (inLock);
+    for (size_t i = 0; i < m.lanes.size(); ++i) f[i] = mapMidiLanes.contains (juce::String (m.lanes[i].name));
+    return f;
+}
+
+juce::File RewiredProcessor::exportMap (juce::String& err)
+{
+    const auto r = result();
+    if (! r.ok || ! r.map.ok) { err = "No song map yet - press PROCESS first"; return {}; }
+    const auto dir = exportFolder();
+    if (! dir.createDirectory()) { err = "Can't create " + dir.getFullPathName(); return {}; }
+    const auto f = dir.getChildFile (safeName (title()) + " - Map.mid");
+    if (! rw::io::writeMapMidi (f, r, mapMidiFlags (r.map), title(), err)) return {};
+    return f;
+}
+
 bool RewiredProcessor::testWaitProcess (int timeoutMs)
 {
     const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
@@ -248,6 +275,8 @@ void RewiredProcessor::getStateInformation (juce::MemoryBlock& dest)
     for (int i = 0; i < kNumSlots; ++i) xml.setAttribute ("in" + juce::String (i), input (i).getFullPathName());
     juce::String on; for (int p = 0; p < rw::kNumParts; ++p) on << (partOn (p) ? "1" : "0");
     xml.setAttribute ("parts", on);
+    xml.setAttribute ("view", mapView() ? "map" : "notes");
+    { const juce::ScopedLock l (inLock); xml.setAttribute ("mapMidi", mapMidiLanes.joinIntoString ("|")); }
     const auto r = result();
     if (r.ok)
     {
@@ -269,6 +298,29 @@ void RewiredProcessor::getStateInformation (juce::MemoryBlock& dest)
                 juce::String t; for (auto& n : sp.notes) t << juce::String (n.start, 4) << ',' << juce::String (n.end, 4) << ',' << n.pitch << ',' << n.velocity << ';';
                 sx->addTextElement (t);
             }
+        // 1.1.0: the song map (older versions ignore it)
+        if (r.map.ok)
+        {
+            const auto& m = r.map;
+            auto* mx = rx->createNewChildElement ("Map");
+            mx->setAttribute ("bpm", m.bpm); mx->setAttribute ("bar1", m.firstDownbeat); mx->setAttribute ("bars", m.bars);
+            for (auto& sc : m.sections)
+            {
+                auto* e = mx->createNewChildElement ("Sec");
+                e->setAttribute ("type", sc.type); e->setAttribute ("label", juce::String (sc.label)); e->setAttribute ("a", sc.startBar); e->setAttribute ("b", sc.endBar);
+            }
+            for (auto& L : m.lanes)
+            {
+                auto* e = mx->createNewChildElement ("Lane");
+                e->setAttribute ("name", juce::String (L.name)); e->setAttribute ("group", L.group); e->setAttribute ("part", L.part); e->setAttribute ("sub", L.sub);
+                juce::String mp; for (int p : L.midiParts) mp << p << ' ';
+                e->setAttribute ("midiParts", mp.trim()); e->setAttribute ("audio", L.fromAudio); e->setAttribute ("child", L.child); e->setAttribute ("drum", L.drumNote);
+                juce::String on; for (auto b : L.barOn) on << (b ? '1' : '0');
+                e->setAttribute ("bars", on);
+                juce::String t; for (auto& b : L.blocks) t << juce::String (b.start, 4) << ',' << juce::String (b.end, 4) << ',' << b.velocity << ';';
+                e->addTextElement (t);
+            }
+        }
         }
     const auto text = xml.toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
     juce::MemoryOutputStream out (dest, false);
@@ -300,6 +352,8 @@ void RewiredProcessor::setStateInformation (const void* data, int size)
             inputs[i] = juce::File::isAbsolutePath (p) ? juce::File (p) : juce::File();
         }
     }
+    mapViewOn.store (xml->getStringAttribute ("view") == "map");
+    { const juce::ScopedLock l (inLock); mapMidiLanes = juce::StringArray::fromTokens (xml->getStringAttribute ("mapMidi"), "|", ""); mapMidiLanes.removeEmptyStrings(); }
     const auto on = xml->getStringAttribute ("parts", "1111111");
     for (int p = 0; p < rw::kNumParts; ++p) partEnabled[(size_t) p].store (p >= on.length() || on[p] != '0');
     rw::Result r;
@@ -330,6 +384,38 @@ void RewiredProcessor::setStateInformation (const void* data, int size)
                 if (n.end >= n.start && n.start >= 0.0) sp.notes.push_back (n);
             }
             r.subs[(size_t) p].push_back (std::move (sp));
+        }
+        if (auto* mx = rx->getChildByName ("Map"))
+        {
+            auto& m = r.map;
+            m.bpm = juce::jlimit (20.0, 400.0, mx->getDoubleAttribute ("bpm", r.bpm)); m.firstDownbeat = mx->getDoubleAttribute ("bar1");
+            m.bars = juce::jlimit (0, 10000, mx->getIntAttribute ("bars"));
+            for (auto* e : mx->getChildWithTagNameIterator ("Sec"))
+            {
+                rw::MapSection sc; sc.type = juce::jlimit (0, rw::kNumSecTypes - 1, e->getIntAttribute ("type")); sc.label = e->getStringAttribute ("label").toStdString();
+                sc.startBar = juce::jlimit (0, m.bars, e->getIntAttribute ("a")); sc.endBar = juce::jlimit (sc.startBar, m.bars, e->getIntAttribute ("b"));
+                m.sections.push_back (sc);
+            }
+            for (auto* e : mx->getChildWithTagNameIterator ("Lane"))
+            {
+                if (m.lanes.size() >= 64) break;
+                rw::MapLane L; L.name = e->getStringAttribute ("name").toStdString(); L.group = juce::jlimit (0, rw::kNumMapGroups - 1, e->getIntAttribute ("group"));
+                L.part = juce::jlimit (-1, rw::kNumParts - 1, e->getIntAttribute ("part", -1)); L.sub = e->getIntAttribute ("sub", -1);
+                if (L.part < 0 || L.sub >= (int) r.subs[(size_t) L.part].size()) L.sub = -1;
+                for (auto& tok : juce::StringArray::fromTokens (e->getStringAttribute ("midiParts"), " ", "")) { const int p = tok.getIntValue(); if (tok.isNotEmpty() && p >= 0 && p < rw::kNumParts) L.midiParts.push_back (p); }
+                L.fromAudio = e->getBoolAttribute ("audio"); L.child = e->getBoolAttribute ("child"); L.drumNote = juce::jlimit (-1, 127, e->getIntAttribute ("drum", -1));
+                const auto bars = e->getStringAttribute ("bars");
+                for (int b = 0; b < m.bars; ++b) L.barOn.push_back (b < bars.length() && bars[b] == '1');
+                for (auto& tok : juce::StringArray::fromTokens (e->getAllSubText(), ";", ""))
+                {
+                    auto f = juce::StringArray::fromTokens (tok, ",", "");
+                    if (f.size() != 3) continue;
+                    rw::MapBlock b { f[0].getDoubleValue(), f[1].getDoubleValue(), juce::jlimit (1, 127, f[2].getIntValue()) };
+                    if (b.end > b.start && b.start >= 0.0) L.blocks.push_back (b);
+                }
+                m.lanes.push_back (std::move (L));
+            }
+            m.ok = m.bars > 0 && ! m.sections.empty();
         }
     }
     { const juce::ScopedLock l (resLock); res = r; }
