@@ -32,9 +32,15 @@ inline juce::String fmt (float v, const juce::String& unit)
         const float r = std::round (v * 10.0f) / 10.0f + 0.0f;   // + 0.0f turns -0.0 into 0.0
         return (r > 0.0f ? "+" : "") + juce::String (r, 1);
     }
+    if (unit == "bpm") return v < 0.5f ? juce::String ("AUTO") : juce::String (juce::roundToInt (v));   // whole bpm only
+    if (std::abs (v - std::round (v)) < 1e-4f) return juce::String (juce::roundToInt (v));                // counts ("2" notes, not "2.00")
     return juce::String (v, 2);
 }
-inline float parse (const juce::String& s, const juce::String& unit) { return unit == "%" ? num (s) / 100.0f : num (s); }
+inline float parse (const juce::String& s, const juce::String& unit)
+{
+    if (unit == "bpm") return s.trim().equalsIgnoreCase ("auto") ? 0.0f : std::round (num (s));
+    return unit == "%" ? num (s) / 100.0f : num (s);
+}
 } // namespace ptab
 
 template <size_t N>
@@ -50,7 +56,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout (const PDef (&def
         else
         {
             const String unit (d.unit);
-            auto a = AudioParameterFloatAttributes().withLabel (unit)
+            auto a = AudioParameterFloatAttributes().withLabel (unit == "bpm" ? String() : unit)   // "AUTO" / "140": no unit after AUTO
                          .withStringFromValueFunction ([unit] (float v, int) { return ptab::fmt (v, unit); })
                          .withValueFromStringFunction ([unit] (const String& s) { return ptab::parse (s, unit); });
             p.push_back (std::make_unique<AudioParameterFloat> (pid, d.name, NormalisableRange<float> (d.lo, d.hi, d.step, d.skew), d.def, a));

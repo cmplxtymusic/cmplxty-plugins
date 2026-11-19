@@ -101,7 +101,12 @@ namespace rwui { namespace hostkeys
     }
    #else
     inline void remember (juce::Component&) {}
-    inline bool release (juce::Component& c) { if (auto* ed = editorOf (c)) { ed->giveAwayKeyboardFocus(); } return false; }
+    inline bool release (juce::Component& c)
+    {
+        if (dynamic_cast<juce::TextInputTarget*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr) return false;   // someone is typing a value
+        if (auto* ed = editorOf (c)) { ed->giveAwayKeyboardFocus(); }
+        return false;
+    }
     inline void rememberForDialog (juce::Component&) {}
     inline void restoreAfterDialog (juce::Component& c) { release (c); }
    #endif

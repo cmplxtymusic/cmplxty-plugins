@@ -15,7 +15,7 @@ def tbar(sec): return (sec - off) / tb
 mb = 240.0 / M['bpm']
 def mtime(bar): return M['firstDownbeat'] + bar * mb
 rep = {'song': T['name']}
-rep['bpm_true'] = T['bpm']; rep['bpm_map'] = round(M['bpm'], 3); rep['bpm_transcribe'] = M.get('transcribeBpm')
+rep['bpm_true'] = T['bpm']; rep['bpm_map'] = round(M['bpm'], 3); rep['bpm_detected'] = M.get('transcribeBpm'); rep['bpm_notes_midi'] = M.get('bpmOut', M.get('transcribeBpm'))
 d = (M['firstDownbeat'] - off) / (tb / 4); d = (d + 2) % 4 - 2; rep['downbeat_err_beats'] = round(d, 2)
 # sections
 true_b = [s[1] for s in T['sections'][1:]]

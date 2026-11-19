@@ -8,6 +8,7 @@
 #include "../src/OrtModel.cpp"
 #include "../src/Instruments.cpp"
 #include "../src/SongMap.cpp"
+#include "../src/Preview.h"
 #include <cstdio>
 #include <random>
 #include <chrono>
@@ -168,7 +169,8 @@ int main()
             if (! drop) r.parts[kChords].push_back ({ t0, t0 + bar * 0.95, 57, 80 });
         }
         MapSources ms; ms.drums = &drums; ms.bass = &bass; ms.music = &music; ms.vocals = &vocals;
-        const auto m = buildSongMap (r, ms);
+        const auto feat = makeMapFeatures (ms, { 0, 1, -1, -1, 2, 3 });
+        const auto m = buildSongMap (r, feat);
         CHECK (m.ok && std::abs (m.bpm - 126.0) < 0.01, "map: tempo refined to 126 (detected 126.3): %.3f", m.bpm);
         CHECK (std::abs (m.firstDownbeat - off) < 0.03, "map: bar 1 found at %.3f s (0.5 s)", m.firstDownbeat);
         CHECK (m.bars == 24, "map: 24 bars (%d)", m.bars);
@@ -184,6 +186,47 @@ int main()
         CHECK (m.buildMs < 200.0, "map: built in %.1f ms", m.buildMs);
         Result empty; empty.seconds = 2.0;
         CHECK (buildSongMap (empty, {}).ok, "map: an empty result still gives a (blank) map without crashing");
+        CHECK (lane ("Drums")->stem == 0 && lane ("Music")->stem == 2 && lane ("Kick")->stem == -1, "map: audio lanes know their preview stem");
+
+        // ---- 1.1.0 BPM edit: regrid() puts the same result on another tempo without the audio (envelopes only)
+        Result g = r; g.mapFeat = feat; g.detectedBpm = 126.3;
+        regrid (g, 0.0, 0);
+        CHECK (g.bpm == 126.0 && g.map.bpm == 126.0 && g.map.bars == 24 && g.map.sections.size() == 3, "regrid auto: whole 126 bpm, 24 bars, 3 sections (%.2f, %d)", g.map.bpm, g.map.bars);
+        regrid (g, 63.0, 0);
+        CHECK (g.bpm == 63.0 && g.map.bpm == 63.0 && g.map.bars == 12 && std::abs (g.map.firstDownbeat - off) < 0.03, "regrid 63 (half): 12 bars, bar 1 still at 0.5 s (%d, %.3f)", g.map.bars, g.map.firstDownbeat);
+        std::string sec63; for (auto& sc : g.map.sections) sec63 += std::to_string (sc.startBar) + " ";
+        CHECK (g.map.sections.size() >= 2 && g.map.sections[1].startBar == 4, "regrid 63: the drop starts on (half-tempo) bar 5: %s", sec63.c_str());
+        regrid (g, 252.0, 0);
+        CHECK (g.map.bpm == 252.0 && g.map.bars == 48, "regrid 252 (double): 48 bars (%d)", g.map.bars);
+        regrid (g, 126.4, 0);
+        CHECK (g.bpm == 126.0, "regrid rounds a typed tempo to a whole bpm (%.2f)", g.bpm);
+        // quantize follows bar 1 (0.5 s in), not the start of the file
+        Result q = g; q.rawParts[kBass] = { { off + 0.03, off + 1.0, 33, 100 } }; q.parts = q.rawParts;
+        regrid (q, 126.0, 1);
+        const double step16 = 60.0 / 126.0 / 4.0;
+        CHECK (std::abs (q.parts[kBass][0].start - off) < 1e-6 && q.rawParts[kBass][0].start == off + 0.03,
+               "quantize 1/16 snaps onto the bar-1 grid (%.4f -> %.4f), unquantized notes kept", off + 0.03, q.parts[kBass][0].start);
+        regrid (q, 126.0, 0);
+        CHECK (std::abs (q.parts[kBass][0].start - (off + 0.03)) < 1e-9, "quantize off again gives the original notes back");
+        (void) step16;
+        // speed: a BPM drag re-grids on every step
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < 10; ++k) regrid (g, 120.0 + k, 0);
+        const double rgMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count() / 10.0;
+        CHECK (rgMs < 30.0, "regrid takes %.2f ms", rgMs);
+    }
+
+    // ---- 1.1.0 preview audio
+    {
+        std::vector<float> x (44100); for (size_t i = 0; i < x.size(); ++i) x[i] = (float) (0.5 * std::sin (kTwoPi * 1000.0 * (double) i / 44100.0)) + (float) (0.3 * std::sin (kTwoPi * 18000.0 * (double) i / 44100.0));
+        const auto y = decimate2 (x);
+        double e = 0; for (size_t i = 1000; i < 21000; ++i) e += (double) y[i] * y[i]; e = std::sqrt (e / 20000.0) / 32767.0;
+        CHECK (y.size() == 22050 && std::abs (e - 0.5 / std::sqrt (2.0)) < 0.02, "decimate2: 44.1k -> 22.05k keeps 1 kHz, removes 18 kHz (rms %.3f, want 0.354)", e);
+        std::vector<Note> mel { { 0.5, 1.0, 69, 100 } }, kit { { 0.25, 0.35, 36, 120 }, { 1.25, 1.35, 42, 90 } };
+        const auto a = renderNotes ({ &mel }, false, 2.0), d = renderNotes ({ &kit }, true, 2.0);
+        auto peak = [] (const std::vector<int16_t>& v, double t0, double t1) { int p = 0; for (size_t i = (size_t) (t0 * 22050); i < (size_t) (t1 * 22050) && i < v.size(); ++i) p = std::max (p, std::abs ((int) v[i])); return p; };
+        CHECK (a.size() == 44100 && peak (a, 0.0, 0.49) == 0 && peak (a, 0.55, 0.95) > 3000 && peak (a, 1.3, 2.0) == 0, "renderNotes: a note sounds only where it is");
+        CHECK (peak (d, 0.26, 0.4) > 8000 && peak (d, 1.26, 1.3) > 1000 && peak (d, 0.6, 1.2) < 200, "renderNotes: drum hits sound (kick, hat), silence between");
     }
 
     std::printf (fails == 0 ? "ALL DSP TESTS PASSED\n" : "%d DSP TEST(S) FAILED\n", fails);

@@ -2,6 +2,8 @@
 //   RewiredCli [--models DIR] (--song FILE | --bass F --melody F --chords F --drums F) --out OUT.mid [--json OUT.json]
 //              [--onset X] [--frame X] [--minms X] [--drums-sens X] [--melody-src 0|1|2] [--quantize 0..3] [--bpm X]
 //              [--map MAP.mid] [--map-json MAP.json] [--map-midi all|Lane,Lane]   (1.1.0 MAP mode: song map file / dump / lanes with real MIDI)
+//              [--regrid BPM]   (1.1.0: after the run, put the result on BPM the way the plug-in's BPM box does; 0 = auto)
+//              [--preview 0|1]  (1.1.0: also build the PLAY / SOLO preview audio, as the plug-in does; off by default)
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "RewiredEngine.h"
 #include "RewiredIO.h"
@@ -11,7 +13,8 @@ int main (int argc, char** argv)
 {
     juce::StringPairArray a; juce::String song, out, json, dump; std::array<juce::String, rw::kNumStemSlots> stems;
     rw::Settings s; juce::String models, tagFile; bool hints = false;
-    juce::String mapOut, mapJson, mapMidi;
+    juce::String mapOut, mapJson, mapMidi; double regridBpm = -1.0;
+    s.preview = false;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const juce::String k (argv[i]), v (argv[i + 1]);
@@ -26,6 +29,7 @@ int main (int argc, char** argv)
         else if (k == "--inst") s.instruments = v.getIntValue() != 0;
         else if (k == "--name-hints") hints = v.getIntValue() != 0;
         else if (k == "--tag") tagFile = v;
+        else if (k == "--regrid") regridBpm = v.getDoubleValue(); else if (k == "--preview") s.preview = v.getIntValue() != 0;
         else if (k == "--map") mapOut = v; else if (k == "--map-json") mapJson = v; else if (k == "--map-midi") mapMidi = v;
         else { std::fprintf (stderr, "unknown option %s\n", argv[i]); return 2; }
     }
@@ -75,10 +79,18 @@ int main (int argc, char** argv)
     }
     std::fprintf (stderr, "\n");
     if (! r.ok) { std::fprintf (stderr, "error: %s\n", r.error.c_str()); return 1; }
+    double regridMs = 0.0;
+    if (regridBpm >= 0.0)
+    {
+        const double g0 = juce::Time::getMillisecondCounterHiRes();
+        rw::regrid (r, regridBpm, s.quantize);
+        regridMs = juce::Time::getMillisecondCounterHiRes() - g0;
+        std::printf ("regrid to %s: %.2f ms\n", regridBpm > 0 ? juce::String (regridBpm).toRawUTF8() : "auto", regridMs);
+    }
     std::vector<int> parts; for (int p = 0; p < rw::kNumParts; ++p) parts.push_back (p);
     if (! rw::io::writeMidi (juce::File::getCurrentWorkingDirectory().getChildFile (out), r, parts, "Rewired", e)) { std::fprintf (stderr, "%s\n", e.toRawUTF8()); return 1; }
     const double secs = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
-    std::printf ("bpm %.2f  audio %.1fs  time %.1fs  melody-from %s\n", r.bpm, r.seconds, secs, r.melodyFrom.c_str());
+    std::printf ("bpm %.2f (detected %.2f)  audio %.1fs  time %.1fs  melody-from %s\n", r.bpm, r.detectedBpm, r.seconds, secs, r.melodyFrom.c_str());
     for (int p = 0; p < rw::kNumParts; ++p)
     {
         std::printf ("  %-8s %zu notes", rw::partName (p), r.parts[(size_t) p].size());
@@ -98,7 +110,7 @@ int main (int argc, char** argv)
     if (mapJson.isNotEmpty())
     {
         juce::String j; j << "{\"bpm\":" << mp.bpm << ",\"firstDownbeat\":" << mp.firstDownbeat << ",\"bars\":" << mp.bars << ",\"buildMs\":" << mp.buildMs
-                         << ",\"time\":" << secs << ",\"transcribeBpm\":" << r.bpm << ",\"sections\":[";
+                         << ",\"time\":" << secs << ",\"transcribeBpm\":" << r.detectedBpm << ",\"bpmOut\":" << r.bpm << ",\"regridMs\":" << regridMs << ",\"sections\":[";
         for (size_t i = 0; i < mp.sections.size(); ++i)
             j << (i ? "," : "") << "[\"" << mp.sections[i].label << "\"," << mp.sections[i].type << "," << mp.sections[i].startBar << "," << mp.sections[i].endBar << "]";
         j << "],\"lanes\":[";

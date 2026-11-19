@@ -1,4 +1,5 @@
 #include "RewiredEngine.h"
+#include "Preview.h"
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -464,14 +465,15 @@ void splitMelodyChords (const std::vector<Note>& all, std::vector<Note>& melody,
     }
 }
 
-void quantizeNotes (std::vector<Note>& v, double bpm, int division)
+void quantizeNotes (std::vector<Note>& v, double bpm, int division, double offset)
 {
     if (division <= 0 || bpm <= 0) return;
     const double grid = 60.0 / bpm * (division == 1 ? 0.25 : division == 2 ? 0.5 : 1.0);
+    offset = std::fmod (offset, grid);   // only the phase of the grid matters
     for (auto& nt : v)
     {
         const double len = nt.end - nt.start;
-        nt.start = std::round (nt.start / grid) * grid;
+        nt.start = std::max (0.0, offset + std::round ((nt.start - offset) / grid) * grid);
         nt.end = nt.start + std::max (grid * 0.5, std::round (len / grid) * grid);
     }
 }
@@ -607,9 +609,71 @@ constexpr float kBassLo = 27.0f, kBassHi = 420.0f, kTonalLo = 60.0f, kTonalHi = 
 
 static void finish (Result& r, const Settings& s, const std::vector<float>& tempoSource)
 {
-    r.bpm = s.bpm > 0 ? s.bpm : detectTempo (tempoSource);
-    if (s.quantize > 0) for (auto& p : r.parts) quantizeNotes (p, r.bpm, s.quantize);
+    r.detectedBpm = s.bpm > 0 ? s.bpm : detectTempo (tempoSource);   // quantize waits for regrid (it needs the map's bar 1)
+    r.bpm = r.detectedBpm;
     r.ok = true;
+}
+
+// Spleeter often leaves a sub bass (a sine / 808 under ~100 Hz) in its "other" stem, so the Bass lane looked empty and Music
+// lit up. The map moves the sub band of "other" from the Music envelope to the Bass one (the notes are not touched).
+void moveSubBass (MapFeatures& f, const std::vector<float>& other)
+{
+    MapEnvelope* bass = nullptr; MapEnvelope* music = nullptr;
+    for (auto& e : f.env) { if (e.group == kGrpBass) bass = &e; if (e.group == kGrpMusic) music = &e; }
+    if (bass == nullptr || music == nullptr || other.empty()) return;
+    // 4th-order Butterworth low-pass at 100 Hz (two biquads)
+    const double w = 2.0 * 3.14159265358979 * 100.0 / Engine::kSampleRate, cw = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
+    const double b0 = (1 - cw) / 2 / (1 + al), b1 = (1 - cw) / (1 + al), a1 = -2 * cw / (1 + al), a2 = (1 - al) / (1 + al);
+    double x1[2] = {}, x2[2] = {}, y1[2] = {}, y2[2] = {};
+    const size_t hop = (size_t) (Engine::kSampleRate / MapEnvelope::kFps);
+    std::vector<float> low ((other.size() + hop - 1) / hop, 0.0f);
+    double acc = 0.0;
+    for (size_t i = 0; i < other.size(); ++i)
+    {
+        double v = other[i];
+        for (int k = 0; k < 2; ++k)
+        {
+            const double y = b0 * v + b1 * x1[k] + b0 * x2[k] - a1 * y1[k] - a2 * y2[k];
+            x2[k] = x1[k]; x1[k] = v; y2[k] = y1[k]; y1[k] = y; v = y;
+        }
+        acc += v * v;
+        if ((i + 1) % hop == 0 || i + 1 == other.size()) { low[i / hop] = (float) (acc / (double) hop); acc = 0.0; }
+    }
+    const size_t n = std::min ({ low.size(), bass->pow.size(), music->pow.size() });
+    // only where the sub band IS the "other" stem (most of its power, smoothed over half a second) and is loud next to the
+    // bass stem's own loud level: low pads, kick bleed and the low end of chords stay in Music
+    std::vector<float> bs (bass->pow.begin(), bass->pow.begin() + (std::ptrdiff_t) n);
+    std::nth_element (bs.begin(), bs.begin() + (std::ptrdiff_t) (n * 95 / 100), bs.end());
+    const double bassRef = n > 0 ? bs[n * 95 / 100] : 0.0;
+    const int W = 25;
+    std::vector<double> cl (n + 1, 0.0), cm (n + 1, 0.0);
+    for (size_t i = 0; i < n; ++i) { cl[i + 1] = cl[i] + low[i]; cm[i + 1] = cm[i] + music->pow[i]; }
+    for (size_t i = 0; i < n; ++i)
+    {
+        const size_t a0 = i > (size_t) W ? i - (size_t) W : 0, a1 = std::min (n, i + (size_t) W + 1);
+        const double ls = (cl[a1] - cl[a0]) / (double) (a1 - a0), ms = (cm[a1] - cm[a0]) / (double) (a1 - a0);
+        if (ls < 0.7 * ms || ls < 0.06 * bassRef) continue;
+        const float m = std::min (low[i], music->pow[i] * 0.999f);
+        bass->pow[i] += m; music->pow[i] -= m;
+    }
+}
+
+void regrid (Result& r, double bpm, int quantize)
+{
+    if (! r.hasRaw) { r.rawParts = r.parts; r.rawSubs = r.subs; r.hasRaw = true; }
+    if (r.detectedBpm <= 0.0) r.detectedBpm = r.bpm > 0.0 ? r.bpm : 120.0;
+    bpm = bpm > 0.0 ? std::clamp (std::round (bpm), 20.0, 400.0) : 0.0;
+    r.parts = r.rawParts; r.subs = r.rawSubs;
+    r.bpm = r.detectedBpm;
+    r.map = buildSongMap (r, r.mapFeat, bpm);
+    r.bpm = r.map.ok ? r.map.bpm : (bpm > 0.0 ? bpm : std::round (r.detectedBpm));
+    r.forcedBpm = bpm; r.quantize = quantize;
+    if (quantize > 0)
+    {
+        const double off = r.map.ok ? r.map.firstDownbeat : 0.0;
+        for (auto& p : r.parts) quantizeNotes (p, r.bpm, quantize, off);
+        for (auto& v : r.subs) for (auto& sp : v) quantizeNotes (sp.notes, r.bpm, quantize, off);
+    }
 }
 
 void Engine::labelParts (Result& r, const Settings& s, const std::array<const std::vector<float>*, kNumParts>& src,
@@ -640,7 +704,7 @@ void Engine::labelParts (Result& r, const Settings& s, const std::array<const st
 
 Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::atomic<bool>* cancel, Progress prog)
 {
-    Result r; r.seconds = (double) song.size() / kSampleRate;
+    Result r; r.seconds = (double) song.size() / kSampleRate; r.settings = s;
     if (! loaded()) { r.error = "models not loaded"; return r; }
     if (song.size() < (size_t) kSampleRate) { r.error = "audio is shorter than a second"; return r; }
     std::array<std::vector<float>, 4> st;   // vocals, drums, bass, other
@@ -690,7 +754,16 @@ Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::
     }
     {
         MapSources ms; ms.vocals = &st[0]; ms.drums = &st[1]; ms.bass = &st[2]; ms.music = &st[3];
-        r.map = buildSongMap (r, ms);
+        r.mapFeat = makeMapFeatures (ms, { 1, 2, -1, -1, 3, 0 });   // Preview stems: vocals, drums, bass, other
+        moveSubBass (r.mapFeat, st[3]);
+        regrid (r, s.bpm, s.quantize);
+    }
+    if (s.preview)
+    {
+        auto pv = std::make_shared<Preview>();
+        pv->mixL = toPcm16 (song.left); if (! song.right.empty()) pv->mixR = toPcm16 (song.right);
+        for (int k = 0; k < 4; ++k) pv->stems[(size_t) k] = decimate2 (st[(size_t) k]);
+        r.preview = std::move (pv);
     }
     if (prog) prog (1.0f, "Done");
     return r;
@@ -698,7 +771,7 @@ Result Engine::transcribeSong (const Audio& song, const Settings& s, const std::
 
 Result Engine::transcribeStems (const std::array<Audio, kNumStemSlots>& stems, const Settings& s, const std::atomic<bool>* cancel, Progress prog)
 {
-    Result r;
+    Result r; r.settings = s;
     for (auto& a : stems) r.seconds = std::max (r.seconds, (double) a.size() / kSampleRate);
     if (! loaded()) { r.error = "models not loaded"; return r; }
     std::vector<float> tempoSrc;
@@ -748,7 +821,24 @@ Result Engine::transcribeStems (const std::array<Audio, kNumStemSlots>& stems, c
         // a melody stem that is a voice (named "vocals" / "vox", or heard as one) is the vocal lane
         const auto& ms0 = r.subs[kMelody];
         if (s.stemInst[kStemMelody] == kInstVocals || (ms0.size() == 1 && ms0[0].inst == kInstVocals)) ms.vocals = ms.lead;
-        r.map = buildSongMap (r, ms);
+        r.mapFeat = makeMapFeatures (ms, { kStemDrums, kStemBass, kStemMelody, kStemChords, -1, kStemMelody });   // Preview stems = stem slots
+        regrid (r, s.bpm, s.quantize);
+        if (s.preview)
+        {
+            auto pv = std::make_shared<Preview>();
+            size_t n = 0; bool stereo = false;
+            for (auto& a : stems) { n = std::max (n, a.size()); stereo |= ! a.right.empty(); }
+            std::vector<float> L (n, 0.0f), R (stereo ? n : 0, 0.0f);
+            for (auto& a : stems)
+                for (size_t i = 0; i < a.size(); ++i)
+                {
+                    L[i] += a.left[i];
+                    if (stereo) R[i] += a.right.empty() ? a.left[i] : a.right[i];
+                }
+            pv->mixL = toPcm16 (L); if (stereo) pv->mixR = toPcm16 (R);
+            for (int k = 0; k < kNumStemSlots; ++k) if (! mm[(size_t) k].empty()) pv->stems[(size_t) k] = decimate2 (mm[(size_t) k]);
+            r.preview = std::move (pv);
+        }
     }
     if (prog) prog (1.0f, "Done");
     return r;

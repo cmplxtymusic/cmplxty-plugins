@@ -13,7 +13,7 @@ const PanelSpec& panelSpec()
             { "DETECTION", nullptr, { 16, 366, 520, 162 },  { { 'k', "onset", "ONSET" }, { 'k', "frame", "HOLD" }, { 'k', "minNote", "SHORTEST" },
                                                               { 'k', "melGap", "MELODY GAP" }, { 'k', "chordMin", "CHORD NOTES" }, { 'c', "melSrc", "MELODY FROM" } }, 124 },
             { "DRUMS",     nullptr, { 546, 366, 130, 162 }, { { 'k', "drumSens", "SENSITIVITY" } } },
-            { "OUTPUT",    nullptr, { 686, 366, 198, 162 }, { { 'k', "bpm", "TEMPO (0=AUTO)" }, { 'c', "quantize", "QUANTIZE" } }, 96 },
+            { "OUTPUT",    nullptr, { 686, 366, 198, 162 }, { { 'k', "bpm", "TEMPO" }, { 'c', "quantize", "QUANTIZE" } }, 96 },
         },
         "onset"
     };
@@ -63,6 +63,123 @@ namespace
 {
 const juce::Colour cBg (0xff101010), cLane (0xff161616), cLine (0xff2d2d2d), cPri (0xffffffff), cSec (0xffb8b8b8), cDim (0xff8a8a8a);
 
+// 1.1.0 transport + tempo controls. None of them takes the keyboard focus (Space and the other keys stay the host's).
+struct SmallBtn : juce::TextButton
+{
+    explicit SmallBtn (const juce::String& t) : juce::TextButton (t) { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+};
+
+// PLAY / STOP with a drawn icon (the bundled font has no transport glyphs)
+struct PlayBtn : juce::Button
+{
+    PlayBtn() : juce::Button ("PLAY") { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    bool on = false;
+    juce::String label;
+    void paintButton (juce::Graphics& g, bool hi, bool down) override
+    {
+        getLookAndFeel().drawButtonBackground (g, *this, juce::Colour (on ? 0xff4a4a4a : 0xff1c1c1c), hi && isEnabled(), down);
+        const auto c = isEnabled() ? cPri : cDim.withAlpha (0.6f);
+        auto r = getLocalBounds().reduced (8, 0);
+        auto ic = r.removeFromLeft (10).withSizeKeepingCentre (8, 8).toFloat();
+        g.setColour (c);
+        if (on) g.fillRect (ic);
+        else { juce::Path t; t.addTriangle (ic.getX(), ic.getY() - 0.5f, ic.getX(), ic.getBottom() + 0.5f, ic.getRight() + 1.0f, ic.getCentreY()); g.fillPath (t); }
+        g.setFont (uiFont (10.5f, true));
+        g.drawText (label.isNotEmpty() ? label : (on ? juce::String ("STOP") : juce::String ("PLAY")), r.withTrimmedLeft (5), juce::Justification::centredLeft);
+    }
+};
+
+// The tempo: drag up / down (1 bpm per 4 px), mouse wheel, or double-click and type. Whole bpm only.
+class BpmBox : public juce::Component, private juce::TextEditor::Listener
+{
+public:
+    std::function<double()> value;          // what to show (0 = nothing yet)
+    std::function<void (double)> onChange;  // whole bpm, live while dragging
+    std::function<void (bool)> gesture;     // drag start / end (one undo step per drag)
+    std::function<void (bool)> onTyping;    // the type-in box opened / closed
+    BpmBox()
+    {
+        setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false);
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+        addChildComponent (ed);
+        ed.setJustification (juce::Justification::centred);
+        ed.setInputRestrictions (5, "0123456789.autoAUTO");   // a tempo ("174", "86.5" rounds) or "auto"
+        ed.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff3a3a3a));   // brighter than the box: clearly typing
+        ed.setColour (juce::TextEditor::textColourId, cPri);
+        ed.setColour (juce::TextEditor::outlineColourId, cPri.withAlpha (0.6f));
+        ed.setColour (juce::TextEditor::focusedOutlineColourId, cPri);
+        ed.addListener (this);
+    }
+    bool typing() const { return ed.isVisible(); }
+    void startTyping()
+    {
+        if (! isEnabled()) return;
+        const double v = value ? value() : 0.0;
+        ed.setFont (uiFont (12.0f, true));
+        ed.setText (v > 0 ? juce::String (juce::roundToInt (v)) : juce::String(), false);
+        ed.setBounds (getLocalBounds()); ed.setVisible (true);
+        ed.setWantsKeyboardFocus (true);
+        ed.grabKeyboardFocus(); ed.selectAll();
+        if (onTyping) onTyping (true);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (juce::Colour (0xff1c1c1c)); g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (isEnabled() ? cPri.withAlpha (dragging ? 0.9f : 0.55f) : cLine); g.drawRoundedRectangle (r, 3.0f, 1.0f);
+        const double v = value ? value() : 0.0;
+        g.setColour (isEnabled() ? cPri : cDim); g.setFont (uiFont (12.0f, true));
+        g.drawText (v > 0 ? juce::String (juce::roundToInt (v)) : juce::String ("--"), getLocalBounds(), juce::Justification::centred);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! isEnabled() || e.mods.isPopupMenu()) return;
+        start = value ? value() : 0.0; if (start <= 0) start = 120.0;
+        dragging = true; lastSent = -1; if (gesture) gesture (true); repaint();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging) return;
+        const double v = juce::jlimit (20.0, 250.0, std::round (start - e.getDistanceFromDragStartY() / 4.0));
+        if (v != lastSent && onChange) { lastSent = v; onChange (v); repaint(); }
+    }
+    void mouseUp (const juce::MouseEvent&) override { if (dragging) { dragging = false; if (gesture) gesture (false); repaint(); } }
+    void mouseDoubleClick (const juce::MouseEvent&) override
+    {
+        juce::Component::SafePointer<BpmBox> sp (this);
+        juce::MessageManager::callAsync ([sp] { if (sp != nullptr) sp->startTyping(); });   // after the click's own focus hand-back
+    }
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        if (! isEnabled() || std::abs (w.deltaY) < 1e-4f) return;
+        double v = value ? value() : 0.0; if (v <= 0) v = 120.0;
+        if (onChange) onChange (juce::jlimit (20.0, 250.0, std::round (v) + (w.deltaY > 0 ? 1.0 : -1.0)));
+        repaint();
+    }
+private:
+    void finish (bool apply)
+    {
+        if (! ed.isVisible()) return;
+        const auto t = ed.getText().trim();
+        ed.setVisible (false); ed.setWantsKeyboardFocus (false);
+        if (apply && onChange)
+        {
+            if (t.equalsIgnoreCase ("auto") || t.equalsIgnoreCase ("a")) onChange (0.0);
+            else if (t.isNotEmpty() && t.containsOnly ("0123456789.") && t.getDoubleValue() > 0.0)
+                onChange (juce::jlimit (20.0, 250.0, std::round (t.getDoubleValue())));
+        }
+        hostkeys::releaseLater (*this);   // typing done: Space goes to the host again
+        if (onTyping) onTyping (false);
+        repaint();
+    }
+    void textEditorReturnKeyPressed (juce::TextEditor&) override { finish (true); }
+    void textEditorEscapeKeyPressed (juce::TextEditor&) override { finish (false); }
+    void textEditorFocusLost (juce::TextEditor&) override { finish (true); }
+    juce::TextEditor ed;
+    double start = 0, lastSent = -1;
+    bool dragging = false;
+};
+
 class RewiredDisplay final : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
@@ -90,6 +207,23 @@ public:
             b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4a4a4a));
             b->setColour (juce::TextButton::textColourOnId, cPri); b->setColour (juce::TextButton::textColourOffId, cSec);
         }
+        for (juce::Component* c : { (juce::Component*) &playBtn, (juce::Component*) &bpmDown, (juce::Component*) &bpmUp, (juce::Component*) &bpmHalf,
+                                    (juce::Component*) &bpmDouble, (juce::Component*) &bpmAuto, (juce::Component*) &bpmBox })
+            addAndMakeVisible (*c);
+        bpmAuto.setClickingTogglesState (false);
+        bpmAuto.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4a4a4a));
+        bpmAuto.setColour (juce::TextButton::textColourOnId, cPri); bpmAuto.setColour (juce::TextButton::textColourOffId, cSec);
+        playBtn.onClick = [this] { proc.togglePlay(); refresh(); };
+        bpmBox.value = [this] { return shownBpm(); };
+        bpmBox.onChange = [this] (double v) { proc.setBpm (v); };
+        bpmBox.onTyping = [this] (bool on) { typingHint = on; repaint(); };
+        bpmBox.gesture = [this] (bool on) { auto* p = proc.apvts.getParameter ("bpm"); if (on) p->beginChangeGesture(); else p->endChangeGesture(); };
+        bpmDown.onClick   = [this] { nudgeBpm (-1.0, 1.0); };
+        bpmUp.onClick     = [this] { nudgeBpm (1.0, 1.0); };
+        bpmHalf.onClick   = [this] { nudgeBpm (0.0, 0.5); };
+        bpmDouble.onClick = [this] { nudgeBpm (0.0, 2.0); };
+        // AUTO on = the detected tempo; click it off to keep the tempo shown as your own (it then stays when you PROCESS again)
+        bpmAuto.onClick   = [this] { if (proc.bpmIsAuto()) { const double v = shownBpm(); proc.setBpm (v > 0 ? v : 120.0); } else proc.setBpm (0.0); refresh(); };
         notesTab.onClick = [this] { proc.setMapView (false); refresh(); };
         mapTab.onClick   = [this] { proc.setMapView (true); refresh(); };
         loadSong.onClick  = [this] { choose (false); };
@@ -98,7 +232,17 @@ public:
         process.onClick   = [this] { if (proc.status() == RewiredProcessor::Status::working) proc.cancelProcess(); else proc.startProcess(); note.clear(); refresh(); };
         exportAll.onClick = [this] { if (proc.mapView()) doExportMap(); else doExport (false); };
         exportSel.onClick = [this] { doExport (true); };
-        startTimerHz (20);
+        startTimerHz (30);
+        refresh();
+    }
+    ~RewiredDisplay() override { stopTimer(); }
+
+    // the tempo shown: the result's (whole bpm) or, before a run, the knob's (0 = auto: nothing yet)
+    double shownBpm() const { return res.ok ? res.bpm : (proc.bpmIsAuto() ? 0.0 : proc.effectiveBpm()); }
+    void nudgeBpm (double add, double mul)
+    {
+        double v = shownBpm(); if (v <= 0) v = 120.0;
+        proc.setBpm (juce::jlimit (20.0, 250.0, std::round (v * mul + add)));
         refresh();
     }
 
@@ -120,9 +264,21 @@ public:
         body = getLocalBounds().reduced (10, 0).withTrimmedTop (68).withTrimmedBottom (28);
         status = getLocalBounds().reduced (10, 0).removeFromBottom (26);
         {
-            auto t = status.withTrimmedTop (5).withTrimmedBottom (3).removeFromRight (124);
-            mapTab.setBounds (t.removeFromRight (60)); t.removeFromRight (4); notesTab.setBounds (t.removeFromRight (60));
-            status.removeFromRight (132);
+            // [PLAY] 1:23.4 / 3:05  BAR 17.3 | BPM [-][140][+] [1/2][x2][AUTO] | status text ... [NOTES][MAP]
+            auto t = status.withTrimmedTop (5).withTrimmedBottom (3);
+            auto tabs = t.removeFromRight (124);
+            mapTab.setBounds (tabs.removeFromRight (60)); tabs.removeFromRight (4); notesTab.setBounds (tabs.removeFromRight (60));
+            t.removeFromRight (8);
+            playBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (6);
+            timeArea = t.removeFromLeft (118); t.removeFromLeft (4);
+            bpmLabel = t.removeFromLeft (26);
+            bpmDown.setBounds (t.removeFromLeft (18)); t.removeFromLeft (2);
+            bpmBox.setBounds (t.removeFromLeft (38)); t.removeFromLeft (2);
+            bpmUp.setBounds (t.removeFromLeft (18)); t.removeFromLeft (5);
+            bpmHalf.setBounds (t.removeFromLeft (28)); t.removeFromLeft (2);
+            bpmDouble.setBounds (t.removeFromLeft (26)); t.removeFromLeft (2);
+            bpmAuto.setBounds (t.removeFromLeft (40)); t.removeFromLeft (10);
+            msgArea = t;
         }
         layoutRows();
     }
@@ -132,8 +288,7 @@ public:
         g.setColour (cBg); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
         g.setColour (cPri.withAlpha (hover == kAnywhere ? 0.7f : 0.25f));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 6.0f, hover == kAnywhere ? 1.5f : 1.0f);
-        const bool ready = proc.status() == RewiredProcessor::Status::ready;
-        const auto res = ready ? proc.result() : rw::Result();
+        const bool ready = proc.status() == RewiredProcessor::Status::ready && res.ok;
         const bool mapOn = proc.mapView();
         const bool mapReady = ready && res.map.ok;
         if (mapOn) chip (g, dragAll, mapReady, mapReady ? "DRAG MAP (.MID)" : "DRAG MAP: -");
@@ -157,8 +312,7 @@ public:
             g.drawFittedText (what, t, juce::Justification::centredLeft, 1, 0.9f);
         }
 
-        double len = 1.0;
-        for (auto& p : res.parts) for (auto& n : p) len = std::max (len, n.end);
+        const double len = notesLength();
         if (mapOn) paintMap (g, res, mapReady);
         else for (auto& ln : lines)
         {
@@ -212,22 +366,45 @@ public:
             if (sub) { const auto& sp = subs[(size_t) ln.sub]; right = sp.fromName ? "file name" : "guess " + juce::String (juce::roundToInt (sp.confidence * 100.0f)) + "%"; }
             g.drawText (right, lane.getRight() + 2, r.getY(), 48, r.getHeight(), juce::Justification::centredRight);
             chip (g, ln.chip, ready && ! notes.empty(), ready && ! notes.empty() ? "DRAG MIDI" : "-");
+            if (showHead())   // playhead
+            {
+                const float x = lane.getX() + (float) juce::jlimit (0.0, 1.0, proc.playPosition() / len) * lane.getWidth();
+                g.setColour (cPri); g.fillRect (x - 0.5f, (float) r.getY(), 1.5f, (float) r.getHeight());
+            }
         }
         if (ready && expanded >= 0 && ! mapOn)
         {
             g.setFont (uiFont (9.5f)); g.setColour (cDim);
             g.drawText ("instrument names are a best guess from the sound", body.getX() + 104, body.getBottom() + 1, 400, 11, juce::Justification::centredLeft);
         }
-        // status + progress
-        g.setFont (uiFont (11.5f)); g.setColour (cSec);
+        // transport time, tempo label, status + progress
+        {
+            const double pos = proc.playPosition(), total = proc.playLength();
+            auto mmss = [] (double t) { const int s10 = (int) std::floor (std::max (0.0, t) * 10.0); return juce::String (s10 / 600) + ":" + juce::String ((s10 / 10) % 60).paddedLeft ('0', 2) + "." + juce::String (s10 % 10); };
+            const bool have = proc.canPlay();
+            auto ta = timeArea.withTrimmedTop (5).withTrimmedBottom (3);
+            g.setFont (uiFont (11.0f, true)); g.setColour (have ? cPri : cDim);
+            juce::String bar;
+            if (res.ok && res.map.ok) { const double b = res.map.toBar (pos); bar = b < 0 ? juce::String ("LEAD-IN") : "BAR " + juce::String ((int) std::floor (b) + 1) + "." + juce::String ((int) std::floor ((b - std::floor (b)) * 4.0) + 1); }
+            g.drawText (proc.previewLoading() ? juce::String ("LOADING...") : mmss (pos) + (total > 0 ? " / " + mmss (total).upToFirstOccurrenceOf (".", false, false) : juce::String()),
+                        ta.removeFromLeft (72), juce::Justification::centredLeft);
+            g.setFont (uiFont (10.0f)); g.setColour (cSec);
+            g.drawText (bar, ta, juce::Justification::centredLeft);
+            g.setFont (uiFont (9.5f, true)); g.setColour (cSec);
+            g.drawText ("BPM", bpmLabel.withTrimmedTop (5).withTrimmedBottom (3), juce::Justification::centredLeft);
+        }
+        g.setFont (uiFont (11.0f)); g.setColour (cSec);
         const bool busy = proc.status() == RewiredProcessor::Status::working;
-        g.drawFittedText (note.isNotEmpty() ? note : proc.lastMessage(), status.withTrimmedRight (busy ? 230 : 0).withTrimmedTop (6), juce::Justification::centredLeft, 1);
+        auto msg = msgArea.withTrimmedTop (5).withTrimmedBottom (3);
         if (busy)
         {
-            auto bar = status.removeFromRight (220).withSizeKeepingCentre (220, 6);
+            auto bar = msg.removeFromRight (std::min (140, msg.getWidth() / 2)).withSizeKeepingCentre (std::min (140, msg.getWidth() / 2), 6);
             g.setColour (cLine); g.fillRect (bar);
             g.setColour (cPri); g.fillRect (bar.withWidth ((int) (bar.getWidth() * juce::jlimit (0.0f, 1.0f, proc.progress()))));
+            msg.removeFromRight (8);
         }
+        g.setColour (cSec);
+        g.drawFittedText (statusText(), msg, juce::Justification::centredLeft, 1, 0.8f);
     }
 
     void paintOverChildren (juce::Graphics& g) override
@@ -298,23 +475,106 @@ public:
     int expandedPart() const { return expanded; }
     juce::Rectangle<int> boxBounds (int slot) const { return boxes[slot]; }
     void demoHover (int target) { hover = target; repaint(); }
-    void toggleMapMidi (int visibleRow) { if (visibleRow >= 0 && visibleRow < (int) mapRows.size()) proc.setMapMidi (mapRows[(size_t) visibleRow].name, ! proc.mapMidi (mapRows[(size_t) visibleRow].name)); repaint(); }
     int mapRowCount() const { return (int) mapRows.size(); }
+    // test hooks: a click where a user would click (row = visible map row)
+    void clickAt (juce::Point<int> p) { handleClick (p); }
+    juce::Point<int> mapToggleAt (int row) const { return row >= 0 && row < (int) mapRows.size() ? mapRows[(size_t) row].toggle.getCentre() : juce::Point<int>(); }
+    juce::Point<int> mapSoloAt (int row) const { return row >= 0 && row < (int) mapRows.size() ? mapRows[(size_t) row].solo.getCentre() : juce::Point<int>(); }
+    juce::Point<int> mapStripAt (int row, double seconds) const { return row >= 0 && row < (int) mapRows.size() ? juce::Point<int> ((int) std::lround (mapX (seconds)), mapRows[(size_t) row].strip.getCentreY()) : juce::Point<int>(); }
+    juce::Point<int> sectionAt (int i) const
+    {
+        if (! res.map.ok || i < 0 || i >= (int) res.map.sections.size()) return {};
+        const auto& sc = res.map.sections[(size_t) i];
+        return { (int) std::lround ((mapX (res.map.barTime (sc.startBar)) + mapX (res.map.barTime (sc.endBar))) / 2.0f), rulerBounds().getCentreY() };
+    }
+    juce::Component* control (const juce::String& n)
+    {
+        if (n == "play") return &playBtn; if (n == "bpm-") return &bpmDown; if (n == "bpm+") return &bpmUp; if (n == "half") return &bpmHalf;
+        if (n == "double") return &bpmDouble; if (n == "auto") return &bpmAuto; if (n == "bpm") return &bpmBox; if (n == "notes") return &notesTab;
+        if (n == "map") return &mapTab; if (n == "process") return &process; if (n == "exportAll") return &exportAll; if (n == "exportSel") return &exportSel;
+        if (n == "clear") return &clear; if (n.startsWith ("part")) return &toggles[(size_t) juce::jlimit (0, rw::kNumParts - 1, n.getTrailingIntValue())];
+        return nullptr;
+    }
+    juce::String statusText() const
+    {
+        if (typingHint) return "Type a tempo (20-250) or AUTO, then Enter (Esc cancels)";
+        return note.isNotEmpty() ? note : hint.isNotEmpty() ? hint : proc.lastMessage();
+    }
+    void typeBpm (const juce::String& t, bool commit) { bpmBox.startTyping(); for (auto* c : bpmBox.getChildren()) if (auto* ed = dynamic_cast<juce::TextEditor*> (c)) { ed->setText (t); if (commit) ed->keyPressed (juce::KeyPress (juce::KeyPress::returnKey)); } }
 
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (e.mouseWasDraggedSinceMouseDown() || e.mods.isPopupMenu()) return;
+        handleClick (e.getPosition());
+    }
+    void mouseMove (const juce::MouseEvent& e) override { updateHint (e.getPosition()); }
+    void mouseExit (const juce::MouseEvent&) override { if (hint.isNotEmpty() || hoverSection >= 0) { hint.clear(); hoverSection = -1; repaint(); } }
+
+    // what a click does. MAP: M = real MIDI in the file, S = solo (hear that lane), a section = play from its start, a lane = move the playhead.
+    // NOTES: a part's name opens its instruments, a lane moves the playhead.
+    void handleClick (juce::Point<int> p)
+    {
+        note.clear();
         if (proc.mapView())
         {
+            if (! res.ok || ! res.map.ok) return;
             for (auto& mr : mapRows)
-                if (mr.toggle.contains (e.getPosition()))
-                { proc.setMapMidi (mr.name, ! proc.mapMidi (mr.name)); repaint(); return; }
+            {
+                if (mr.toggle.expanded (2).contains (p)) { proc.setMapMidi (mr.name, ! proc.mapMidi (mr.name)); updateHint (p); repaint(); return; }
+                if (mr.solo.expanded (2).contains (p))
+                {
+                    const auto& L = res.map.lanes[(size_t) mr.lane];
+                    if (proc.laneSoloSource (L, res) == 0) { note = mr.name + ": nothing to play for this lane"; repaint(); return; }
+                    const bool on = proc.solo() != mr.name;
+                    proc.setSolo (on ? mr.name : juce::String());
+                    if (on && ! proc.playing()) proc.play (proc.playPosition() >= proc.playLength() - 0.05 ? 0.0 : proc.playPosition());
+                    updateHint (p); repaint(); return;
+                }
+            }
+            if (rulerBounds().contains (p))
+            {
+                const int b = (int) std::floor (res.map.toBar (mapTime (p.x)));
+                for (auto& sc : res.map.sections)
+                    if (b >= sc.startBar && b < sc.endBar) { proc.play (std::max (0.0, res.map.barTime (sc.startBar))); repaint(); return; }
+                return;
+            }
+            for (auto& mr : mapRows) if (mr.strip.contains (p)) { proc.seek (mapTime (p.x)); repaint(); return; }
             return;
         }
         for (auto& ln : lines)
-            if (ln.sub < 0 && ln.row.withTrimmedLeft (28).withWidth (76).contains (e.getPosition()) && proc.status() == RewiredProcessor::Status::ready
-                && ! proc.result().subs[(size_t) ln.part].empty())
+            if (ln.sub < 0 && ln.row.withTrimmedLeft (28).withWidth (76).contains (p) && res.ok && ! res.subs[(size_t) ln.part].empty())
             { expand (ln.part); return; }
+        for (auto& ln : lines)
+            if (res.ok && ln.lane.contains (p)) { proc.seek ((double) (p.x - ln.lane.getX()) / std::max (1, ln.lane.getWidth()) * notesLength()); repaint(); return; }
+    }
+
+    // hover help in the status line (the switches are small, so say what they do)
+    void updateHint (juce::Point<int> p)
+    {
+        juce::String h; int sec = -1;
+        if (proc.mapView() && res.ok && res.map.ok)
+        {
+            for (auto& mr : mapRows)
+            {
+                if (mr.toggle.expanded (2).contains (p))
+                    h = proc.mapMidi (mr.name) ? "MIDI on: " + mr.name + " goes into the map file as its transcribed notes - click for empty blocks"
+                                               : "MIDI off: " + mr.name + " is empty blocks in the map file - click to put its real notes in";
+                else if (mr.solo.expanded (2).contains (p))
+                {
+                    const int src = proc.laneSoloSource (res.map.lanes[(size_t) mr.lane], res);
+                    h = proc.solo() == mr.name ? "SOLO: click to hear the whole song again"
+                      : src == 1 ? "SOLO: hear only " + mr.name + " (its stem)" : src == 2 ? "SOLO: hear " + mr.name + "'s notes" : mr.name + ": nothing to play";
+                }
+            }
+            if (rulerBounds().contains (p))
+            {
+                const int b = (int) std::floor (res.map.toBar (mapTime (p.x)));
+                for (size_t i = 0; i < res.map.sections.size(); ++i)
+                    if (b >= res.map.sections[i].startBar && b < res.map.sections[i].endBar) { sec = (int) i; h = "Click to play from " + juce::String (res.map.sections[i].label) + " (bar " + juce::String (res.map.sections[i].startBar + 1) + ")"; }
+            }
+        }
+        if (h != hint || sec != hoverSection) { hint = h; hoverSection = sec; repaint(); }
+        setMouseCursor (sec >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
@@ -345,7 +605,7 @@ private:
     void layoutRows()
     {
         lines.clear();
-        const auto r = proc.status() == RewiredProcessor::Status::ready ? proc.result() : rw::Result();
+        const auto& r = res;
         if (expanded >= 0 && r.subs[(size_t) expanded].empty()) expanded = -1;
         for (int i = 0; i < rw::kNumParts; ++i)
         {
@@ -431,100 +691,157 @@ private:
                 if ((pass >= 1 && sub) || (pass >= 2 && piece)) continue;
                 show.push_back (i);
             }
-            if ((int) show.size() * 12 <= avail) break;
+            if ((int) show.size() * 11 <= avail) break;
         }
+        hiddenLanes = (int) m.lanes.size() - (int) show.size();
         const int rh = juce::jlimit (10, 22, avail / std::max (1, (int) show.size()));
         auto b = body.withTrimmedTop (22);
         for (int i : show)
         {
             MapRow r; r.lane = i; r.name = juce::String (m.lanes[(size_t) i].name);
             r.row = b.removeFromTop (rh).reduced (0, 1);
-            r.toggle = juce::Rectangle<int> (r.row.getX() + 6, r.row.getCentreY() - 5, 10, 10).expanded (3);
-            r.strip = r.row.withLeft (body.getX() + 132).withRight (r.row.getRight() - 56).reduced (2, 1);
+            const int sz = juce::jlimit (8, 12, r.row.getHeight() - 1), cy = r.row.getCentreY();
+            r.toggle = juce::Rectangle<int> (r.row.getX() + 5, cy - sz / 2, sz, sz);
+            r.solo = juce::Rectangle<int> (r.row.getX() + 21, cy - sz / 2, sz, sz);
+            r.strip = r.row.withLeft (stripLeft()).withRight (stripRight()).reduced (0, 1);
             mapRows.push_back (r);
         }
     }
-    void paintMap (juce::Graphics& g, const rw::Result& res, bool ready)
+    int stripLeft() const  { return body.getX() + 136; }
+    int stripRight() const { return body.getRight() - 56; }
+    double mapLength() const { return std::max (res.seconds, res.map.ok ? res.map.barTime (res.map.bars) : 0.0); }
+    float mapX (double t) const { return (float) stripLeft() + (float) (juce::jlimit (0.0, 1.0, t / std::max (1e-6, mapLength()))) * (float) (stripRight() - stripLeft()); }
+    double mapTime (int x) const { return juce::jlimit (0.0, mapLength(), (double) (x - stripLeft()) / (double) std::max (1, stripRight() - stripLeft()) * mapLength()); }
+    juce::Rectangle<int> rulerBounds() const { return body.withHeight (20).withLeft (stripLeft()).withRight (stripRight()); }
+    double notesLength() const
     {
-        const auto& m = res.map;
+        double len = std::max (1.0, res.seconds);
+        for (auto& p : res.parts) for (auto& n : p) len = std::max (len, n.end);
+        return len;
+    }
+    bool showHead() const { return res.ok && (proc.playing() || proc.playPosition() > 0.0); }
+
+    // a small square switch with a letter: filled = on
+    static void letterBox (juce::Graphics& g, juce::Rectangle<int> r, const char* letter, bool on, bool live)
+    {
+        const auto f = r.toFloat().reduced (0.5f);
+        if (on) { g.setColour (cPri); g.fillRoundedRectangle (f, 2.0f); }
+        else { g.setColour (live ? cSec.withAlpha (0.8f) : cLine.brighter (0.2f)); g.drawRoundedRectangle (f, 2.0f, 1.0f); }
+        g.setColour (on ? cBg : (live ? cSec : cDim.withAlpha (0.5f)));
+        g.setFont (uiFont (r.getHeight() >= 11 ? 8.5f : 7.5f, true));
+        g.drawText (letter, r, juce::Justification::centred);
+    }
+
+    void paintMap (juce::Graphics& g, const rw::Result& r, bool ready)
+    {
+        const auto& m = r.map;
         if (! ready)
         {
             g.setColour (cLane); g.fillRect (body);
             g.setColour (cLine); g.drawRect (body);
+            const bool busy = proc.status() == RewiredProcessor::Status::working;
             g.setFont (uiFont (12.0f, true)); g.setColour (cSec);
-            g.drawText ("SONG MAP", body.withTrimmedBottom (body.getHeight() / 2 + 4), juce::Justification::centredBottom);
+            g.drawText (busy ? "MAPPING THE SONG..." : "SONG MAP", body.withTrimmedBottom (body.getHeight() / 2 + 4), juce::Justification::centredBottom);
             g.setFont (uiFont (11.0f)); g.setColour (cDim);
-            g.drawFittedText ("Load a reference song and press PROCESS. MAP finds the sections (intro, build, drop, break, outro) and the bars,\n"
-                              "and draws a lane for every instrument with a block wherever it plays. Drag it into FL Studio as one MIDI file.",
-                              body.withTrimmedTop (body.getHeight() / 2 + 4).reduced (20, 0), juce::Justification::centredTop, 3);
+            const juce::String text = proc.hasAnyInput()
+                ? "Press PROCESS. MAP finds the tempo, the bars and the sections (intro, build, drop, break, outro), and draws a lane\n"
+                  "for every instrument with a block wherever it plays. PLAY listens along; drag the map into FL Studio as one MIDI file."
+                : "Drop a reference song here (or your stems), then press PROCESS. MAP finds the tempo, the bars and the sections, and draws\n"
+                  "a lane for every instrument with a block wherever it plays. Drag it into FL Studio as one MIDI file.";
+            g.drawFittedText (text, body.withTrimmedTop (body.getHeight() / 2 + 4).reduced (20, 0), juce::Justification::centredTop, 3);
             return;
         }
         if (mapRows.empty() || mapRowsFor != proc.contentVersion()) { layoutMapRows (m); mapRowsFor = proc.contentVersion(); }
-        const auto stripX = body.getX() + 134, stripR = body.getRight() - 58;
-        const double t0 = 0.0, t1 = std::max (res.seconds, m.barTime (m.bars));
-        auto xOf = [&] (double t) { return (float) stripX + (float) ((t - t0) / (t1 - t0)) * (float) (stripR - stripX); };
-        // ruler
+        const auto soloName = proc.solo();
+        const bool anySolo = soloName.isNotEmpty();
+        // ruler: column heads on the left, the sections (click one to play from there)
         const auto rulerRow = body.withHeight (20);
-        const auto ruler = rulerRow.withLeft (stripX).withRight (stripR);
+        const auto ruler = rulerBounds();
         g.setColour (cLane); g.fillRect (rulerRow);
-        g.setFont (uiFont (9.0f, true)); g.setColour (cDim);
-        g.drawText ("REAL MIDI", rulerRow.getX() + 2, rulerRow.getY() + 2, 60, 16, juce::Justification::centredLeft);
-        g.drawText (juce::String (m.bpm, m.bpm == std::round (m.bpm) ? 0 : 2) + " BPM / " + juce::String (m.bars) + " BARS", rulerRow.getX() + 50, rulerRow.getY() + 2, 82, 16, juce::Justification::centredRight);
-        for (auto& sc : m.sections)
+        g.setFont (uiFont (9.5f, true)); g.setColour (cSec);
+        g.drawText (juce::String (m.bars) + " BARS", rulerRow.getX() + 6, rulerRow.getY() + 2, stripLeft() - rulerRow.getX() - 10, 16, juce::Justification::centredLeft);
+        if (hiddenLanes > 0)
+        { g.setFont (uiFont (9.0f)); g.setColour (cDim); g.drawText ("+" + juce::String (hiddenLanes) + " in .mid", rulerRow.getX() + 6, rulerRow.getY() + 2, stripLeft() - rulerRow.getX() - 10, 16, juce::Justification::centredRight); }
+        for (size_t i = 0; i < m.sections.size(); ++i)
         {
-            const float a = xOf (m.barTime (sc.startBar)), z = xOf (m.barTime (sc.endBar));
-            juce::Rectangle<float> r (a, (float) ruler.getY() + 1, std::max (1.0f, z - a - 1.0f), (float) ruler.getHeight() - 2);
-            g.setColour (sectionShade (sc.type)); g.fillRect (r);
-            g.setColour (cPri.withAlpha (0.35f)); g.drawRect (r, 1.0f);
-            g.setColour (sc.type == rw::kSecDrop ? cPri : cSec); g.setFont (uiFont (9.5f, sc.type == rw::kSecDrop));
-            g.drawFittedText (juce::String (sc.label).toUpperCase() + "  " + juce::String (sc.startBar + 1), r.toNearestInt().reduced (3, 0), juce::Justification::centredLeft, 1, 0.7f);
+            const auto& sc = m.sections[i];
+            const float a = mapX (m.barTime (sc.startBar)), z = mapX (m.barTime (sc.endBar));
+            juce::Rectangle<float> rr (a, (float) ruler.getY() + 1, std::max (1.0f, z - a - 1.0f), (float) ruler.getHeight() - 2);
+            const bool hot = hoverSection == (int) i;
+            g.setColour (sectionShade (sc.type).brighter (hot ? 0.35f : 0.0f)); g.fillRect (rr);
+            g.setColour (cPri.withAlpha (hot ? 0.8f : 0.35f)); g.drawRect (rr, 1.0f);
+            // the name, and the bar it starts on (dimmer, right) when there is room for both
+            auto tr = rr.toNearestInt().reduced (3, 0);
+            const juce::String barNo (sc.startBar + 1);
+            g.setFont (uiFont (9.0f));
+            const int bw = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), barNo) + 4;
+            g.setFont (uiFont (9.5f, sc.type == rw::kSecDrop));
+            const juce::String lab = juce::String (sc.label).toUpperCase();
+            const bool room = tr.getWidth() > juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), lab) + bw + 6;
+            g.setColour (sc.type == rw::kSecDrop || hot ? cPri : cSec);
+            g.drawFittedText (lab, room ? tr.withTrimmedRight (bw) : tr, juce::Justification::centredLeft, 1, 0.7f);
+            if (room) { g.setFont (uiFont (9.0f)); g.setColour (cDim); g.drawText (barNo, tr.removeFromRight (bw), juce::Justification::centredRight); }
         }
         // lanes
         for (auto& mr : mapRows)
         {
             const auto& L = m.lanes[(size_t) mr.lane];
-            const bool real = proc.mapMidi (mr.name);
-            g.setColour (L.child ? cBg.brighter (0.03f) : cLane); g.fillRect (mr.row);
-            g.setColour (cLine); g.drawRect (mr.row);
-            auto tg = mr.toggle.reduced (3).toFloat();
-            g.setColour (real ? cPri : cDim.withAlpha (0.7f));
-            if (real) g.fillRoundedRectangle (tg, 2.0f); else g.drawRoundedRectangle (tg, 2.0f, 1.0f);
-            g.setColour (L.child ? cSec : cPri); g.setFont (uiFont (L.child ? 9.5f : 10.5f, ! L.child));
+            const bool real = proc.mapMidi (mr.name), soloed = anySolo && mr.name == soloName, dim = anySolo && ! soloed;
+            const int soloSrc = proc.laneSoloSource (L, r);
+            g.setColour (soloed ? cLane.brighter (0.12f) : L.child ? cBg.brighter (0.03f) : cLane); g.fillRect (mr.row);
+            g.setColour (soloed ? cPri.withAlpha (0.6f) : cLine); g.drawRect (mr.row);
+            letterBox (g, mr.toggle, "M", real, true);
+            letterBox (g, mr.solo, "S", soloed, soloSrc != 0);
+            g.setColour ((L.child ? cSec : cPri).withAlpha (dim ? 0.45f : 1.0f)); g.setFont (uiFont (L.child ? 9.5f : 10.5f, ! L.child));
             const juce::String nm (L.name);
+            const int nx = mr.row.getX() + (L.child ? 46 : 38);
             g.drawFittedText (L.child ? (nm.contains (" - ") ? nm.fromFirstOccurrenceOf (" - ", false, false) : nm) : nm.toUpperCase(),
-                              mr.row.getX() + (L.child ? 34 : 24), mr.row.getY(), 100 - (L.child ? 10 : 0), mr.row.getHeight(), juce::Justification::centredLeft, 1, 0.75f);
+                              nx, mr.row.getY(), stripLeft() - nx - 4, mr.row.getHeight(), juce::Justification::centredLeft, 1, 0.75f);
             const auto st = mr.strip;
             g.setColour (cLine.brighter (0.1f)); g.drawRect (st);
-            const auto shade = groupShade (L.group);
+            const auto shade = groupShade (L.group).withMultipliedAlpha (dim ? 0.35f : 1.0f);
             for (auto& b : L.blocks)
             {
-                const float a = xOf (b.start), z = xOf (b.end);
-                juce::Rectangle<float> r (a, (float) st.getY() + 1.5f, std::max (1.5f, z - a), (float) st.getHeight() - 3.0f);
-                g.setColour (shade.withAlpha (real ? 0.35f : (L.child ? 0.6f : 0.85f))); g.fillRect (r);
-                if (L.group == rw::kGrpVocals) { g.setColour (cPri.withAlpha (0.9f)); g.drawRect (r, 1.0f); }
+                const float a = mapX (b.start), z = mapX (b.end);
+                juce::Rectangle<float> rr (a, (float) st.getY() + 1.5f, std::max (1.5f, z - a), (float) st.getHeight() - 3.0f);
+                g.setColour (shade.withMultipliedAlpha (real ? 0.45f : (L.child ? 0.6f : 0.85f))); g.fillRect (rr);
+                if (L.group == rw::kGrpVocals) { g.setColour (cPri.withAlpha (dim ? 0.3f : 0.9f)); g.drawRect (rr, 1.0f); }
             }
             if (real)   // the notes that go into the file instead of the blocks
             {
                 std::vector<const std::vector<rw::Note>*> src;
-                if (L.part >= 0) src.push_back (L.sub >= 0 && (size_t) L.sub < res.subs[(size_t) L.part].size() ? &res.subs[(size_t) L.part][(size_t) L.sub].notes : &res.parts[(size_t) L.part]);
-                else for (int p : L.midiParts) src.push_back (&res.parts[(size_t) p]);
-                g.setColour (cPri);
+                if (L.part >= 0) src.push_back (L.sub >= 0 && (size_t) L.sub < r.subs[(size_t) L.part].size() ? &r.subs[(size_t) L.part][(size_t) L.sub].notes : &r.parts[(size_t) L.part]);
+                else for (int p : L.midiParts) src.push_back (&r.parts[(size_t) p]);
+                // a mini piano roll: pitch sets the height inside the lane (drum hits are short full-height ticks)
+                int lo = 127, hi = 0; for (auto* v : src) for (auto& n : *v) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); }
+                const float top = (float) st.getY() + 2.5f, span = std::max (1.0f, (float) st.getHeight() - 6.0f);
+                g.setColour (cPri.withAlpha (dim ? 0.4f : 1.0f));
                 for (auto* v : src) for (auto& n : *v)
                 {
-                    const float a = xOf (n.start), w = L.drumNote >= 0 ? 1.0f : std::max (1.0f, xOf (n.end) - a);
-                    g.fillRect (a, (float) st.getCentreY() - 1.0f, w, 2.0f);
+                    const float a = mapX (n.start);
+                    if (L.drumNote >= 0) { g.fillRect (a, top, 1.0f, span + 1.0f); continue; }
+                    const float w = std::max (1.0f, mapX (n.end) - a), y = top + span * (hi > lo ? (float) (hi - n.pitch) / (float) (hi - lo) : 0.5f);
+                    g.fillRect (a, y - 0.5f, w, 1.5f);
                 }
             }
             int on = 0; for (auto x : L.barOn) on += x;
             g.setColour (cDim); g.setFont (uiFont (9.5f));
             g.drawText (L.blocks.empty() ? juce::String ("-") : juce::String (on) + (on == 1 ? " bar" : " bars"), st.getRight() + 2, mr.row.getY(), 52, mr.row.getHeight(), juce::Justification::centredRight);
         }
-        // section lines across the lanes
         if (! mapRows.empty())
         {
+            // section lines across the lanes
             g.setColour (cPri.withAlpha (0.18f));
             const float y0 = (float) mapRows.front().row.getY(), y1 = (float) mapRows.back().row.getBottom();
-            for (auto& sc : m.sections) { const float x = xOf (m.barTime (sc.startBar)); g.drawLine (x, y0, x, y1, 1.0f); }
+            for (auto& sc : m.sections) { const float x = mapX (m.barTime (sc.startBar)); g.drawLine (x, y0, x, y1, 1.0f); }
+            // playhead over the ruler and every lane
+            if (showHead())
+            {
+                const float x = mapX (proc.playPosition());
+                g.setColour (cPri); g.fillRect (x - 0.75f, (float) ruler.getY(), 1.5f, y1 - (float) ruler.getY());
+                juce::Path tri; tri.addTriangle (x - 4.0f, (float) ruler.getY(), x + 4.0f, (float) ruler.getY(), x, (float) ruler.getY() + 5.0f);
+                g.fillPath (tri);
+            }
         }
     }
 
@@ -532,8 +849,21 @@ private:
     {
         const auto st = proc.status();
         const bool busy = st == RewiredProcessor::Status::working, ready = st == RewiredProcessor::Status::ready;
-        process.setButtonText (busy ? "CANCEL" : "PROCESS");
+        res = ready ? proc.result() : rw::Result();
+        reprocess = ready && proc.detectionChanged();
+        process.setButtonText (busy ? "CANCEL" : reprocess ? "RE-PROCESS" : "PROCESS");
         process.setEnabled (busy || proc.hasAnyInput());
+        process.setColour (juce::TextButton::buttonColourId, reprocess ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff1c1c1c));
+        if (reprocess && note.isEmpty()) note = "Detection settings changed - press RE-PROCESS to apply them (tempo and quantize apply at once)";
+        else if (! reprocess && note.startsWith ("Detection settings changed")) note.clear();
+        wasPlaying = proc.playing();
+        playBtn.on = wasPlaying; playBtn.setEnabled (proc.canPlay() && ! busy); playBtn.repaint();
+        const bool autoBpm = proc.bpmIsAuto();
+        bpmAuto.setToggleState (autoBpm, juce::dontSendNotification);
+        for (auto* c : { (juce::Component*) &bpmDown, (juce::Component*) &bpmUp, (juce::Component*) &bpmHalf, (juce::Component*) &bpmDouble, (juce::Component*) &bpmBox })
+            c->setEnabled (! busy);
+        bpmAuto.setEnabled (! busy);
+        bpmBox.repaint();
         for (auto* b : { &loadSong, &loadStems, &clear }) b->setEnabled (! busy);
         exportAll.setEnabled (ready); exportSel.setEnabled (ready);
         const bool mapOn = proc.mapView();
@@ -550,14 +880,26 @@ private:
     void timerCallback() override
     {
         if (proc.contentVersion() != lastVersion) { refresh(); return; }
+        if (proc.playing() != wasPlaying) { refresh(); return; }   // the preview ran to the end / the DAW started
+        if (++slow % 6 == 0 && (proc.status() == RewiredProcessor::Status::ready && proc.detectionChanged()) != reprocess) { refresh(); return; }
         if (proc.status() == RewiredProcessor::Status::working) repaint();
+        else if (proc.playing() || proc.previewLoading()) { repaint (body.expanded (2)); repaint (timeArea); }
     }
 
     RewiredProcessor& proc;
     juce::TextButton loadSong { "LOAD SONG..." }, loadStems { "LOAD STEMS..." }, clear { "CLEAR" }, process { "PROCESS" },
                      exportAll { "EXPORT ALL" }, exportSel { "EXPORT SELECTED" }, notesTab { "NOTES" }, mapTab { "MAP" };
-    struct MapRow { int lane = 0; juce::String name; juce::Rectangle<int> row, toggle, strip; };
+    struct MapRow { int lane = 0; juce::String name; juce::Rectangle<int> row, toggle, solo, strip; };
     std::vector<MapRow> mapRows;
+    PlayBtn playBtn;
+    SmallBtn bpmDown { "-" }, bpmUp { "+" }, bpmHalf { "1/2" }, bpmDouble { "x2" }, bpmAuto { "AUTO" };
+    BpmBox bpmBox;
+    bool typingHint = false;
+    juce::Rectangle<int> timeArea, bpmLabel, msgArea;
+    rw::Result res;                      // the result as of the last refresh (paint never copies it)
+    juce::String hint;
+    int hoverSection = -1, hiddenLanes = 0, slow = 0;
+    bool wasPlaying = false, reprocess = false;
     int mapRowsFor = -1;
     std::array<Btn, rw::kNumParts> toggles;
     std::vector<Line> lines;
@@ -575,4 +917,20 @@ void displayDrop (juce::Component* d, int target, const juce::StringArray& files
 void displayExpand (juce::Component* d, int part) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) r->expand (part); }
 void displayHover (juce::Component* d, int target) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) r->demoHover (target); }
 int displayMapRows (juce::Component* d) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) return r->mapRowCount(); return 0; }
+// 1.1.0 test hooks: click where a user would (what: "midi" / "solo" / "strip" / "section" / a control name), read the status line, type a tempo
+bool displayClick (juce::Component* d, const juce::String& what, int index, double seconds)
+{
+    auto* r = dynamic_cast<RewiredDisplay*> (d);
+    if (r == nullptr) return false;
+    juce::Point<int> p;
+    if (what == "midi") p = r->mapToggleAt (index); else if (what == "solo") p = r->mapSoloAt (index);
+    else if (what == "strip") p = r->mapStripAt (index, seconds); else if (what == "section") p = r->sectionAt (index);
+    else if (auto* c = r->control (what)) { if (! c->isEnabled() || ! c->isVisible()) return false; if (auto* b = dynamic_cast<juce::Button*> (c)) { b->triggerClick(); /* async: the caller runs the message loop */ return true; } return false; }
+    if (p == juce::Point<int>()) return false;
+    r->clickAt (p);
+    return true;
+}
+juce::Component* displayControl (juce::Component* d, const juce::String& n) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) return r->control (n); return nullptr; }
+juce::String displayStatus (juce::Component* d) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) return r->statusText(); return {}; }
+void displayTypeBpm (juce::Component* d, const juce::String& t, bool commit) { if (auto* r = dynamic_cast<RewiredDisplay*> (d)) r->typeBpm (t, commit); }
 } // namespace rwui

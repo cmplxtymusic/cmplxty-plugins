@@ -1,43 +1,49 @@
 // CMPLXTY Rewired 1.1.0 MAP mode: beat grid, downbeat, sections and per-instrument lanes of a reference song.
 // Everything here works on the engine's Result (notes, drum hits, instrument sub-parts) plus the stem audio; it costs
 // milliseconds next to the separation and note models. Tuned and measured with test/make_map_songs.py + test/map_eval.py.
+#include <limits>
 #include "RewiredEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <complex>
 #include <numeric>
 #include <chrono>
-#include <cstdio>
-#include <cstdlib>
 
 namespace rw
 {
 namespace
 {
-constexpr double kSR = Engine::kSampleRate;
 constexpr double kPiMap = 3.14159265358979323846;
 
-// energy of any span in O(1) from a prefix sum of x^2
+// energy of any span in O(1) from a prefix sum of the 10 ms power envelope (linear inside a frame)
 struct Energy
 {
-    std::vector<double> cum;
-    explicit Energy (const std::vector<float>* x)
+    std::vector<double> cum, pw;
+    explicit Energy (const MapEnvelope* e)
     {
-        if (x == nullptr || x->empty()) return;
-        cum.resize (x->size() + 1, 0.0);
-        for (size_t i = 0; i < x->size(); ++i) cum[i + 1] = cum[i] + (double) (*x)[i] * (*x)[i];
+        if (e == nullptr || e->pow.empty()) return;
+        pw.assign (e->pow.begin(), e->pow.end());
+        cum.resize (pw.size() + 1, 0.0);
+        for (size_t i = 0; i < pw.size(); ++i) cum[i + 1] = cum[i] + pw[i];
     }
     bool valid() const { return ! cum.empty(); }
+    double at (double f) const   // integral of the power up to frame position f
+    {
+        const size_t i = (size_t) f;
+        return i >= pw.size() ? cum.back() : cum[i] + (f - (double) i) * pw[i];
+    }
     double db (double t0, double t1) const   // mean power in dBFS over [t0, t1)
     {
         if (! valid()) return -120.0;
-        const auto n = (double) (cum.size() - 1);
-        const double a = std::clamp (t0 * kSR, 0.0, n), b = std::clamp (t1 * kSR, 0.0, n);
-        if (b - a < 1.0) return -120.0;
-        const double p = (cum[(size_t) b] - cum[(size_t) a]) / (b - a);
-        return 10.0 * std::log10 (p + 1e-12);
+        const auto n = (double) pw.size();
+        const double a = std::clamp (t0 * MapEnvelope::kFps, 0.0, n), b = std::clamp (t1 * MapEnvelope::kFps, 0.0, n);
+        if (b - a < 0.25) return -120.0;
+        // whole frames inside the span only: a frame that straddles the edge would smear a part that starts right after the span
+        // into it (an entry would then look one beat early). Short spans (< 2 frames) interpolate.
+        const double A = std::ceil (a - 1e-9), B = std::floor (b + 1e-9);
+        if (B - A >= 2.0) return 10.0 * std::log10 ((cum[(size_t) B] - cum[(size_t) A]) / (B - A) + 1e-12);
+        return 10.0 * std::log10 ((at (b) - at (a)) / (b - a) + 1e-12);
     }
-    double seconds() const { return valid() ? (double) (cum.size() - 1) / kSR : 0.0; }
 };
 
 double percentile (std::vector<double> v, double q)
@@ -50,12 +56,10 @@ double percentile (std::vector<double> v, double q)
 
 struct Ev { double t; double w; };
 
-// phase-coherent tempo refinement: the bpm (within +-1.5 % of the detected one) at which the hits line up best over the
-// whole song, and the beat phase. A tempo that is off by 0.3 bpm drifts by a beat over a few minutes; this does not.
-void refineGrid (const std::vector<Ev>& ev, double bpm0, double& bpm, double& phase)
+// phase-coherent tempo: the whole bpm (near the detected one) at which the hits line up best over the whole song, and the beat
+// phase. A tempo that is off by 0.3 bpm drifts by a beat over a few minutes; this does not. forced > 0: that tempo (the user's), phase only.
+void refineGrid (const std::vector<Ev>& ev, double bpm0, double forced, double& bpm, double& phase)
 {
-    bpm = bpm0; phase = 0.0;
-    if (ev.size() < 8) return;
     auto coh = [&] (double b, double* ph)
     {
         const double P = 60.0 / b; std::complex<double> z = 0;
@@ -63,13 +67,20 @@ void refineGrid (const std::vector<Ev>& ev, double bpm0, double& bpm, double& ph
         if (ph != nullptr) { double a = std::arg (z) / (2.0 * kPiMap) * P; while (a < 0) a += P; *ph = a; }
         return std::abs (z);
     };
-    // octave: drum & bass is often heard at half tempo (snares then fall on the off-beats); take double when it lines up clearly better
-    if (bpm0 * 2.0 <= 190.0 && coh (bpm0 * 2.0, nullptr) > 1.3 * coh (bpm0, nullptr)) bpm0 *= 2.0;
+    phase = 0.0;
+    if (forced > 0.0) { bpm = forced; if (ev.size() >= 4) coh (bpm, &phase); return; }
+    bpm = std::round (bpm0);
+    if (ev.size() < 8) return;
+    // octave: drum & bass is often heard at half tempo (snares then fall on the off-beats); take double when it lines up better.
+    // 78-95 bpm doubles more easily (160-190 is far more common in the music this is for than 80-95 with busy drums)
+    const double need = (bpm0 >= 78.0 && bpm0 <= 95.0) ? 1.15 : 1.3;
+    if (bpm0 * 2.0 <= 190.0 && coh (bpm0 * 2.0, nullptr) > need * coh (bpm0, nullptr)) bpm0 *= 2.0;
     double best = bpm0, bs = -1.0;
     for (double b = bpm0 * 0.985; b <= bpm0 * 1.015; b += 0.005) { const double s = coh (b, nullptr); if (s > bs) { bs = s; best = b; } }
-    const double r = std::round (best);
-    if (std::abs (best - r) < 0.35 && coh (r, nullptr) >= 0.97 * bs) best = r;   // studio tracks sit on whole bpm
-    bpm = best; coh (bpm, &phase);
+    // a whole bpm (studio tracks sit on one; a map with 139.68 bpm is no use in a DAW): the better of the two around the best fit
+    const double lo = std::floor (best), hi = std::ceil (best);
+    bpm = lo == hi ? lo : (coh (hi, nullptr) >= coh (lo, nullptr) ? hi : lo);
+    coh (bpm, &phase);
 }
 
 // beat-level on/off clean-up: close short gaps, drop lone beats (spurious notes / bleed), drop decaying one-beat tails
@@ -89,7 +100,56 @@ void tidy (std::vector<unsigned char>& on, int maxGap, bool keepLone)
 }
 } // namespace
 
-SongMap buildSongMap (const Result& r, const MapSources& src)
+MapFeatures makeMapFeatures (const MapSources& src, const std::array<int, kNumMapGroups>& stemOf)
+{
+    MapFeatures f;
+    const std::vector<float>* x[kNumMapGroups] = { src.drums, src.bass, src.lead, src.chords, src.music, src.vocals };
+    const size_t hop = (size_t) (Engine::kSampleRate / MapEnvelope::kFps);
+    for (int g = 0; g < kNumMapGroups; ++g)
+    {
+        if (x[g] == nullptr || x[g]->empty()) continue;
+        MapEnvelope e; e.group = g; e.stem = stemOf[(size_t) g];
+        const auto& a = *x[g];
+        e.pow.resize ((a.size() + hop - 1) / hop);
+        for (size_t i = 0; i < e.pow.size(); ++i)
+        {
+            double s = 0.0; const size_t b = i * hop, z = std::min (a.size(), b + hop);
+            for (size_t k = b; k < z; ++k) s += (double) a[k] * a[k];
+            e.pow[i] = (float) (s / (double) hop);
+        }
+        f.env.push_back (std::move (e));
+    }
+    f.leadIsVoice = src.vocals != nullptr && src.vocals == src.lead;
+    if (f.leadIsVoice) for (auto& e : f.env) if (e.group == kGrpLead) e.pow.clear();   // one lane for that audio: the vocal one
+    f.env.erase (std::remove_if (f.env.begin(), f.env.end(), [] (const MapEnvelope& e) { return e.pow.empty(); }), f.env.end());
+    return f;
+}
+
+namespace
+{
+SongMap buildCore (const Result& r, const MapFeatures& feat, double forcedBpm, double anchor);   // anchor: bar 1 to keep, NaN = find it
+}
+
+// A tempo the user set that is the detected one, half or double of it (or x4 / x0.25) keeps the detected bar 1 (only the bar length
+// changes); any other tempo finds its own beat phase and bar 1.
+SongMap buildSongMap (const Result& r, const MapFeatures& feat, double forcedBpm)
+{
+    const double none = std::numeric_limits<double>::quiet_NaN();
+    if (forcedBpm <= 0.0) { auto m = buildCore (r, feat, 0.0, none); m.autoBpm = m.bpm; return m; }
+    const auto clock0 = std::chrono::steady_clock::now();
+    const auto a = buildCore (r, feat, 0.0, none);
+    const double q = forcedBpm / a.bpm;
+    bool related = false;
+    for (double k : { 0.25, 0.5, 1.0, 2.0, 4.0 }) related |= std::abs (q / k - 1.0) < 0.03;
+    auto m = buildCore (r, feat, forcedBpm, related ? a.firstDownbeat : none);   // (bar 1 can sit a hair before 0 s)
+    m.autoBpm = a.bpm;
+    m.buildMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - clock0).count();
+    return m;
+}
+
+namespace
+{
+SongMap buildCore (const Result& r, const MapFeatures& feat, double forcedBpm, double anchor)
 {
     const auto clock0 = std::chrono::steady_clock::now();
     SongMap m;
@@ -103,16 +163,16 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
         for (int p : { (int) kBass, (int) kChords, (int) kMelody, (int) kHats })
             for (auto& n : r.parts[(size_t) p]) ev.push_back ({ n.start, 0.5 });
     double bpm = r.bpm > 20 ? r.bpm : 120.0, phase = 0.0;
-    refineGrid (ev, bpm, bpm, phase);
+    refineGrid (ev, bpm, forcedBpm, bpm, phase);
     m.bpm = bpm;
     const double P = 60.0 / bpm;
+    const bool anchored = ! std::isnan (anchor);
+    if (anchored) { phase = std::fmod (anchor, P); if (phase < 0.0) phase += P; }
 
-    // stem audio used for activity and section features; missing stems fall back to notes
-    struct Src { const std::vector<float>* x; int group; };
-    const Src srcs[] = { { src.drums, kGrpDrums }, { src.bass, kGrpBass }, { src.lead, kGrpLead }, { src.chords, kGrpChords },
-                         { src.music, kGrpMusic }, { src.vocals, kGrpVocals } };
+    // stem loudness used for activity and section features; missing stems fall back to notes
     std::vector<Energy> en; std::vector<int> enGroup;
-    for (auto& s : srcs) if (s.x != nullptr && ! s.x->empty()) { en.emplace_back (s.x); enGroup.push_back (s.group); }
+    for (int g : { (int) kGrpDrums, (int) kGrpBass, (int) kGrpLead, (int) kGrpChords, (int) kGrpMusic, (int) kGrpVocals })
+        if (auto* e = feat.get (g)) { en.emplace_back (e); enGroup.push_back (g); }
 
     // beats over the whole song, starting at the first beat at or after 0
     const int nBeats = std::max (1, (int) std::ceil ((len - phase) / P));
@@ -127,7 +187,6 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     }
 
     const double loudest = ref.empty() ? -120.0 : *std::max_element (ref.begin(), ref.end());
-    if (std::getenv ("RW_MAP_DEBUG")) for (size_t q = 0; q < en.size(); ++q) std::fprintf (stderr, "stem group %d ref %.1f dB (loudest %.1f)\n", enGroup[q], ref[q], loudest);
 
     // first sound: the first beat where any stem (or any note) is within 40 dB of its loud level
     double firstSound = len, lastSound = 0.0;
@@ -179,10 +238,9 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     for (int j = 0; j < 4; ++j)
     {
         const double s = 0.25 * novJ[j] / novT + (entT > 2.0 ? entJ[j] / entT : 0.0) + (cymT > 1.0 ? cymJ[j] / cymT : 0.0);
-        if (std::getenv ("RW_MAP_DEBUG")) std::fprintf (stderr, "downbeat j=%d nov %.3f ent %.3f (%g) cym %.3f phase %.3f first %.3f\n", j, novJ[j] / novT, entJ[j] / entT, entT, cymJ[j] / cymT, phase, firstSound);
         if (s > bestS + 1e-9) { bestS = s; bestJ = j; }
     }
-    double bar0 = beatT (bestJ);
+    double bar0 = anchored ? anchor : beatT (bestJ);
     while (bar0 - 4 * P >= firstSound - P * 0.25) bar0 -= 4 * P;
     while (bar0 < firstSound - P * 0.25) bar0 += 4 * P;
     m.firstDownbeat = bar0;
@@ -196,7 +254,7 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     // beat activity per lane over [-4, nBeatsMap): one bar of pickup before bar 1
     constexpr int kPre = 4;
     const int NB = nBeatsMap + kPre;
-    auto audioLane = [&] (const std::vector<float>* x, std::vector<unsigned char>& on, std::vector<double>& lvl)
+    auto audioLane = [&] (const MapEnvelope* x, std::vector<unsigned char>& on, std::vector<double>& lvl)
     {
         Energy e (x);
         std::vector<double> d ((size_t) NB);
@@ -282,7 +340,7 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     // drums: the whole kit (stem audio) + one lane per piece
     {
         MapLane L; L.name = "Drums"; L.group = kGrpDrums; L.drumNote = 36; L.midiParts = { kKick, kSnare, kHats, kCymbals };
-        if (src.drums != nullptr && ! src.drums->empty()) { L.fromAudio = true; audioLane (src.drums, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
+        if (auto* x = feat.get (kGrpDrums)) { L.fromAudio = true; L.stem = x->stem; audioLane (x, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
         else { noteLane ({ &r.parts[kKick], &r.parts[kSnare], &r.parts[kHats], &r.parts[kCymbals] }, true, on, lvl); finishLane (L, on, lvl, 4, true, 1); }
         m.lanes.push_back (std::move (L));
         for (int p = kKick; p <= kCymbals; ++p)
@@ -295,17 +353,17 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     // bass
     {
         MapLane L; L.name = withInst (kBass, "Bass"); L.group = kGrpBass; L.part = kBass;
-        if (src.bass != nullptr && ! src.bass->empty()) { L.fromAudio = true; audioLane (src.bass, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
+        if (auto* x = feat.get (kGrpBass)) { L.fromAudio = true; L.stem = x->stem; audioLane (x, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
         else { noteLane ({ &r.parts[kBass] }, false, on, lvl); finishLane (L, on, lvl, 2, false, 2); }
         m.lanes.push_back (std::move (L));
         subLanes (kBass, kGrpBass, "Bass");
     }
     // lead / melody (in song mode with a sung melody the melody is the vocal lane, so the lead lane is the instruments' top line)
-    const bool leadIsVoice = src.vocals != nullptr && src.vocals == src.lead;
-    if (! leadIsVoice && ! (sungMelody && src.lead == nullptr))
+    const bool leadIsVoice = feat.leadIsVoice;
+    if (! leadIsVoice && ! (sungMelody && feat.get (kGrpLead) == nullptr))
     {
         MapLane L; L.name = withInst (kMelody, "Lead"); L.group = kGrpLead; L.part = kMelody;
-        if (src.lead != nullptr && ! src.lead->empty()) { L.fromAudio = true; audioLane (src.lead, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
+        if (auto* x = feat.get (kGrpLead)) { L.fromAudio = true; L.stem = x->stem; audioLane (x, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
         else { noteLane ({ &r.parts[kMelody] }, false, on, lvl); finishLane (L, on, lvl, 2, false, 2); }
         m.lanes.push_back (std::move (L));
         subLanes (kMelody, kGrpLead, "Lead");
@@ -313,17 +371,17 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     // chords
     {
         MapLane L; L.name = withInst (kChords, "Chords"); L.group = kGrpChords; L.part = kChords;
-        if (src.chords != nullptr && ! src.chords->empty()) { L.fromAudio = true; audioLane (src.chords, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
+        if (auto* x = feat.get (kGrpChords)) { L.fromAudio = true; L.stem = x->stem; audioLane (x, on, lvl); finishLane (L, on, lvl, 1, false, 2); }
         else { noteLane ({ &r.parts[kChords] }, false, on, lvl); finishLane (L, on, lvl, 2, false, 2); }
         m.lanes.push_back (std::move (L));
         subLanes (kChords, kGrpChords, "Chords");
     }
     // music: everything that is not drums / bass / vocals (song mode only: Spleeter's "other" stem)
-    if (src.music != nullptr && ! src.music->empty())
+    if (auto* x = feat.get (kGrpMusic))
     {
-        MapLane L; L.name = "Music"; L.group = kGrpMusic; L.fromAudio = true; L.midiParts = { kChords };
+        MapLane L; L.name = "Music"; L.group = kGrpMusic; L.fromAudio = true; L.stem = x->stem; L.midiParts = { kChords };
         if (! sungMelody) L.midiParts.push_back (kMelody);
-        audioLane (src.music, on, lvl); finishLane (L, on, lvl, 1, false, 2);
+        audioLane (x, on, lvl); finishLane (L, on, lvl, 1, false, 2);
         m.lanes.push_back (std::move (L));
     }
     // vocal map: the vocal stem; without one, the notes labelled "Vocals" (or an empty lane, so the slot is always there)
@@ -331,7 +389,7 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
         MapLane L; L.name = "Vocals"; L.group = kGrpVocals;
         if (sungMelody || leadIsVoice) L.part = kMelody;
         // no gap closing: the vocal map shows the phrases, a one-beat breath between two lines stays a gap
-        if (src.vocals != nullptr && ! src.vocals->empty()) { L.fromAudio = true; audioLane (src.vocals, on, lvl); finishLane (L, on, lvl, 0, false, 2); }
+        if (auto* x = feat.get (kGrpVocals)) { L.fromAudio = true; L.stem = x->stem; audioLane (x, on, lvl); finishLane (L, on, lvl, 0, false, 2); }
         else
         {
             std::vector<const std::vector<Note>*> v;
@@ -477,4 +535,5 @@ SongMap buildSongMap (const Result& r, const MapSources& src)
     m.buildMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - clock0).count();
     return m;
 }
+} // namespace
 } // namespace rw

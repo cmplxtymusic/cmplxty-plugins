@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include "OrtModel.h"
@@ -40,6 +41,7 @@ struct Settings
     float bpm = 0.0f;              // 0 = detect
     bool instruments = true;       // 1.0.1: label instruments inside Bass / Melody / Chords (needs instruments.onnx)
     std::array<int, 4> stemInst { -1, -1, -1, -1 };   // per StemSlot: instrument named by the stem's file name (-1 = ask the model)
+    bool preview = true;           // 1.1.0: keep the song / stems for the PLAY / SOLO preview (the CLI does not need it)
 };
 
 // input audio: 44.1 kHz, planar; mono buffers are fine (right = empty)
@@ -47,6 +49,7 @@ struct Audio { std::vector<float> left, right; bool empty() const { return left.
 
 enum StemSlot { kStemBass = 0, kStemMelody, kStemChords, kStemDrums, kNumStemSlots };
 
+struct Preview;   // Preview.h
 struct Result
 {
     bool ok = false;
@@ -57,6 +60,16 @@ struct Result
     std::string melodyFrom;   // "vocals" / "instruments" / "stem"
     std::array<std::vector<SubPart>, kNumParts> subs;   // 1.0.1: instrument sub-parts of Bass / Melody / Chords (empty = not labelled)
     SongMap map;                                        // 1.1.0: sections + where every part plays (MAP mode)
+    // 1.1.0: what regrid() needs to put the result on another tempo / quantize setting without running the models again
+    Settings settings;                                  // what it was made with (the UI asks for PROCESS when a detection setting changes)
+    double detectedBpm = 0.0;                           // the engine's own estimate (0 = unknown: use bpm)
+    double forcedBpm = 0.0;                             // the tempo it is gridded on when the user set one (0 = auto)
+    int quantize = 0;                                   // the quantize division parts / subs are on (0 = off)
+    bool hasRaw = false;
+    std::array<std::vector<Note>, kNumParts> rawParts;  // parts / subs before quantize
+    std::array<std::vector<SubPart>, kNumParts> rawSubs;
+    MapFeatures mapFeat;                                // stem loudness envelopes for the map
+    std::shared_ptr<const Preview> preview;             // song + stem audio for PLAY / SOLO (not saved)
 };
 
 using Progress = std::function<void (float, const char*)>;
@@ -91,7 +104,7 @@ double detectTempo (const std::vector<float>& mono44k);
 std::array<std::vector<Note>, 4> detectDrums (const std::vector<float>& drums44k, float sensitivity);
 std::vector<Note> monophonic (std::vector<Note> notes, bool lowest);
 void splitMelodyChords (const std::vector<Note>& all, std::vector<Note>& melody, std::vector<Note>& chords, float chordMinNotes, int melodyGap = 7);
-void quantizeNotes (std::vector<Note>& notes, double bpm, int division);
+void quantizeNotes (std::vector<Note>& notes, double bpm, int division, double offset = 0.0);   // grid lines at offset + k * step
 
 // 1.1.0 MAP mode. Song mode: drums / bass / music (Spleeter "other") / vocals stems. Stems mode: the loaded stems
 // (a melody stem that is a voice becomes the vocal lane). Any of them may be null; the lanes then come from the notes.
@@ -104,5 +117,11 @@ struct MapSources
     const std::vector<float>* lead = nullptr;
     const std::vector<float>* chords = nullptr;
 };
-SongMap buildSongMap (const Result&, const MapSources&);
+// stemOf: per MapGroup, the Preview stem index of that audio (-1 = none)
+MapFeatures makeMapFeatures (const MapSources&, const std::array<int, kNumMapGroups>& stemOf);
+SongMap buildSongMap (const Result&, const MapFeatures& = {}, double forcedBpm = 0.0);
+// Put a result on a tempo (0 = the detected one, a whole bpm) and a quantize division: rebuilds the map on that bar grid and
+// re-quantizes the notes from the unquantized ones, on the map's bars. Cheap (a few ms); the BPM box / TEMPO knob call it live.
+void moveSubBass (MapFeatures&, const std::vector<float>& otherStem);   // song mode: the sub band of "other" counts as Bass in the map
+void regrid (Result&, double bpm, int quantize);
 } // namespace rw

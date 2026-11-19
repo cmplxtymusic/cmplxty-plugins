@@ -125,6 +125,10 @@ void displayDrop (juce::Component* display, int target, const juce::StringArray&
 void displayExpand (juce::Component* display, int part);
 void displayHover (juce::Component* display, int target);
 int displayMapRows (juce::Component* display);   // 1.1.0: lanes shown in the MAP view (after a paint)
+bool displayClick (juce::Component* display, const juce::String& what, int index = 0, double seconds = 0.0);
+juce::Component* displayControl (juce::Component* display, const juce::String& name);
+juce::String displayStatus (juce::Component* display);
+void displayTypeBpm (juce::Component* display, const juce::String& text, bool commit = true);   // commit false: leave it mid-typing (screenshots)
 
 // The whole interface, laid out at a fixed base size and scaled by the editor (so the window can be resized freely).
 class Panel final : public juce::Component, private juce::Timer
@@ -228,9 +232,20 @@ public:
     void mouseDown (const juce::MouseEvent&) override { handBack(); }
     void mouseUp (const juce::MouseEvent&) override   { handBack(); }
 
+    void parentHierarchyChanged() override;
+
 private:
     void handBack() { if (! panel.popupOverlay().isOpen()) rwui::hostkeys::release (*this); }
+    // 1.1.0: in the Standalone app Space plays / stops the preview. In a DAW, Space stays the DAW's (nothing here takes the keyboard).
+    struct SpaceKey final : juce::KeyListener
+    {
+        explicit SpaceKey (RewiredProcessor& p) : proc (p) {}
+        bool keyPressed (const juce::KeyPress& k, juce::Component*) override { if (k == juce::KeyPress::spaceKey) { proc.togglePlay(); return true; } return false; }
+        RewiredProcessor& proc;
+    };
     RewiredProcessor& proc;
+    SpaceKey space { proc };
+    juce::Component::SafePointer<juce::Component> spaceOn;
     rwui::Panel panel;
     juce::ComponentBoundsConstrainer constrainer;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RewiredEditor)

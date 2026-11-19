@@ -828,7 +828,22 @@ RewiredEditor::RewiredEditor (RewiredProcessor& p) : AudioProcessorEditor (&p), 
     if (w >= RewiredProcessor::kBaseW * 6 / 10 && h >= RewiredProcessor::kBaseH * 6 / 10) setSize (w, h); else setSize (RewiredProcessor::kBaseW, RewiredProcessor::kBaseH);
 }
 
-RewiredEditor::~RewiredEditor() { removeMouseListener (this); setLookAndFeel (nullptr); }
+RewiredEditor::~RewiredEditor()
+{
+    if (spaceOn != nullptr) spaceOn->removeKeyListener (&space);
+    removeMouseListener (this); setLookAndFeel (nullptr);
+}
+
+void RewiredEditor::parentHierarchyChanged()
+{
+    juce::AudioProcessorEditor::parentHierarchyChanged();
+    if (! juce::JUCEApplicationBase::isStandaloneApp()) return;
+    auto* top = getTopLevelComponent();
+    if (top == spaceOn.getComponent()) return;
+    if (spaceOn != nullptr) spaceOn->removeKeyListener (&space);
+    top->addKeyListener (&space);
+    spaceOn = top;
+}
 
 void RewiredEditor::applySavedSize()
 {
